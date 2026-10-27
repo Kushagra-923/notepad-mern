@@ -1,0 +1,27 @@
+// Idempotent statements, run in order at startup. Add new ones to the end.
+export const schema = [
+  `CREATE TABLE IF NOT EXISTS users (
+     id SERIAL PRIMARY KEY,
+     username TEXT NOT NULL,
+     password_hash TEXT NOT NULL DEFAULT '',
+     google_id TEXT UNIQUE,
+     email TEXT
+   )`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower ON users (lower(username))',
+  `CREATE TABLE IF NOT EXISTS notes (
+     id SERIAL PRIMARY KEY,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     title TEXT NOT NULL DEFAULT 'Untitled',
+     content TEXT NOT NULL DEFAULT '',
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  'CREATE INDEX IF NOT EXISTS notes_owner ON notes (owner_id, updated_at DESC)',
+  `CREATE TABLE IF NOT EXISTS note_versions (
+     id SERIAL PRIMARY KEY,
+     note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+     title TEXT NOT NULL,
+     content TEXT NOT NULL,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  'CREATE INDEX IF NOT EXISTS versions_note ON note_versions (note_id, id DESC)',
+]
