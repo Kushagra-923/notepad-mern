@@ -1,41 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
 import Auth from './Auth.jsx'
-import ThemeToggle from './ThemeToggle.jsx'
+import Sidebar from './Sidebar.jsx'
+import HistoryPanel from './HistoryPanel.jsx'
+import ShareDialog from './ShareDialog.jsx'
+import { ago, words, userIdOf } from './lib.js'
 
-const load = () => {
+const loadSession = () => {
   try { return JSON.parse(localStorage.getItem('session')) } catch { return null }
 }
 
-const toDate = (s) => new Date(s.replace(' ', 'T') + 'Z')
-const ago = (s) => {
-  const sec = Math.max(0, (Date.now() - toDate(s)) / 1000)
-  if (sec < 60) return 'just now'
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`
-  if (sec < 86400 * 7) return `${Math.floor(sec / 86400)}d ago`
-  return toDate(s).toLocaleDateString()
-}
-const words = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0)
-
 export default function App() {
-  const [session, setSession] = useState(load)
+  const [session, setSession] = useState(loadSession)
   const [notes, setNotes] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [search, setSearch] = useState('')
+  const [scope, setScope] = useState('all')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [history, setHistory] = useState(null) // null = closed, array = open
   const [selectedVersion, setSelectedVersion] = useState(null)
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
+  const [sharing, setSharing] = useState(false)
   const [conflict, setConflict] = useState(null) // { id, current } when someone else saved first
   const [loading, setLoading] = useState(true)
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const saveTimer = useRef()
   const saving = useRef(false)
   const saveAgain = useRef(null)
   const notesRef = useRef([])
   const conflictRef = useRef(null)
+  const activeIdRef = useRef(null)
   const titleRef = useRef()
   const token = session?.token
+  const myId = token ? userIdOf(token) : null
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -47,18 +43,29 @@ export default function App() {
     localStorage.removeItem('session')
     setSession(null)
     setNotes([])
+    notesRef.current = []
     setActiveId(null)
     setHistory(null)
+    setSharing(false)
+    setLoading(true)
   }
 
   const api = async (url, options) => {
-    const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-      ...options,
-      body: options?.body && JSON.stringify(options.body),
-    })
-    if (res.status === 401 && token) logout()
+    let res
+    try {
+      res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
+        ...options,
+        body: options?.body && JSON.stringify(options.body),
+      })
+    } catch {
+      throw Object.assign(new Error('Cannot reach the server. Check your connection.'), { status: 0 })
+    }
     const data = await res.json().catch(() => null)
+    if (res.status === 401 && token) {
+      logout()
+      setError('Your session expired. Please log in again.')
+    }
     if (!res.ok) throw Object.assign(new Error(data?.error || res.statusText), { status: res.status, body: data })
     return data
   }
@@ -66,29 +73,83 @@ export default function App() {
   const onAuth = (data) => {
     localStorage.setItem('session', JSON.stringify(data))
     setSession(data)
+    setError('')
   }
 
   notesRef.current = notes
   conflictRef.current = conflict
+  activeIdRef.current = activeId
   const active = notes.find((n) => n._id === activeId)
+  const loaded = active && active.content !== undefined
+  const readOnly = active?.role === 'viewer'
 
   // Update a note in state and in the ref at once, so a queued save sees the new version immediately
   const patchNote = (id, patch) => {
     notesRef.current = notesRef.current.map((n) => (n._id === id ? { ...n, ...patch } : n))
     setNotes(notesRef.current)
   }
+  const dropNote = (id) => {
+    notesRef.current = notesRef.current.filter((n) => n._id !== id)
+    setNotes(notesRef.current)
+    if (activeIdRef.current === id) { setActiveId(null); setHistory(null); setSharing(false) }
+  }
+
+  // ----- list -----
+  // Notes that aren't open are replaced by the fresh list entry; the open note keeps its text and version.
+  const mergeList = (incoming) => {
+    const prev = new Map(notesRef.current.map((n) => [n._id, n]))
+    const open = activeIdRef.current
+    const next = incoming.map((n) => {
+      const old = prev.get(n._id)
+      if (n._id !== open || !old) return n
+      return { ...old, preview: n.preview, role: n.role, ownerName: n.ownerName }
+    })
+    if (open && !next.some((n) => n._id === open) && prev.has(open)) next.unshift(prev.get(open)) // keep the open note even if the filter hides it
+    notesRef.current = next
+    setNotes(next)
+  }
+  const loadList = async () => mergeList(await api(`/api/notes?scope=${scope}&q=${encodeURIComponent(search)}`))
 
   useEffect(() => {
     if (!token) return
     const t = setTimeout(() => {
-      api(`/api/notes?q=${encodeURIComponent(search)}`)
-        .then((n) => { setNotes(n); setError('') })
-        .catch(() => setError('Cannot reach the server'))
+      loadList()
+        .then(() => setError(''))
+        .catch((e) => setError(e.message))
         .finally(() => setLoading(false))
     }, 200)
     return () => clearTimeout(t)
-  }, [search, token])
+  }, [search, scope, token])
 
+  useEffect(() => {
+    if (!token) return
+    const i = setInterval(() => loadList().catch(() => {}), 15000)
+    return () => clearInterval(i)
+  }, [search, scope, token])
+
+  // ----- open note: load it, then keep it fresh so collaborators' edits appear -----
+  const refresh = async (id) => {
+    try {
+      const fresh = await api(`/api/notes/${id}`)
+      const local = notesRef.current.find((n) => n._id === id)
+      if (!local) return
+      const dirty = saveTimer.current?.id === id || saving.current
+      if (local.content === undefined || (fresh.version > local.version && !dirty && conflictRef.current?.id !== id)) patchNote(id, fresh)
+      else patchNote(id, { role: fresh.role })
+    } catch (e) {
+      if (e.status === 404) { dropNote(id); setError('That note is no longer available to you.') }
+      // other failures (offline, server restarting) are retried by the next poll
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !activeId) return
+    refresh(activeId)
+    const i = setInterval(() => refresh(activeId), 4000)
+    return () => clearInterval(i)
+  }, [activeId, token])
+
+  // ----- saving -----
   // Saves are serialized: each one sends the latest text with the latest known version
   const save = async (id) => {
     if (conflictRef.current?.id === id) return
@@ -96,13 +157,14 @@ export default function App() {
     saving.current = true
     try {
       const n = notesRef.current.find((x) => x._id === id)
-      if (!n) return
+      if (!n || n.content === undefined || n.role === 'viewer') return
       const saved = await api(`/api/notes/${id}`, { method: 'PUT', body: { title: n.title, content: n.content, version: n.version } })
       patchNote(id, { version: saved.version, updatedAt: saved.updatedAt, updatedBy: saved.updatedBy })
       setStatus('Saved')
     } catch (e) {
       setStatus('')
       if (e.status === 409) setConflict({ id, current: e.body.current })
+      else if (e.status === 403) { setError(e.message); refresh(id) }
       else setError(e.message)
     } finally {
       saving.current = false
@@ -110,11 +172,11 @@ export default function App() {
     }
   }
 
-  // Send any unsaved edit right away (used before switching notes / opening history)
+  // Send any unsaved edit right away (used before switching notes / opening history / sharing)
   const flush = async () => {
     if (!saveTimer.current) return
-    clearTimeout(saveTimer.current)
-    const id = saveTimer.current.id
+    const { timer, id } = saveTimer.current
+    clearTimeout(timer)
     saveTimer.current = null
     await save(id)
   }
@@ -127,30 +189,31 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (active && active.title === 'Untitled' && !active.content) titleRef.current?.select()
-  }, [activeId])
+    if (loaded && !readOnly && active.title === 'Untitled' && !active.content) titleRef.current?.select()
+  }, [activeId, loaded])
 
   const addNote = async () => {
     try {
       await flush()
       const note = await api('/api/notes', { method: 'POST', body: { title: 'Untitled', content: '' } })
-      setNotes((n) => [note, ...n])
+      if (scope === 'shared') setScope('mine')
+      notesRef.current = [note, ...notesRef.current]
+      setNotes(notesRef.current)
       setActiveId(note._id)
       setHistory(null)
       setError('')
-    } catch {
-      setError('Could not create note')
+    } catch (e) {
+      setError(`Could not create note: ${e.message}`)
     }
   }
 
   const edit = (field, value) => {
     patchNote(activeId, { [field]: value })
     setStatus('Saving…')
-    clearTimeout(saveTimer.current)
+    clearTimeout(saveTimer.current?.timer)
     const id = activeId
-    const timer = setTimeout(() => { saveTimer.current = null; save(id) }, 500)
-    timer.id = id
-    saveTimer.current = timer
+    // browsers return a number from setTimeout, so keep the id next to it instead of on it
+    saveTimer.current = { id, timer: setTimeout(() => { saveTimer.current = null; save(id) }, 500) }
   }
 
   const keepMine = async () => {
@@ -174,14 +237,22 @@ export default function App() {
   }
 
   const remove = async () => {
-    if (!confirm('Delete this note and its history?')) return
+    if (!confirm('Delete this note for everyone, including its history?')) return
     try {
-      clearTimeout(saveTimer.current)
+      clearTimeout(saveTimer.current?.timer)
       saveTimer.current = null
       await api(`/api/notes/${activeId}`, { method: 'DELETE' })
-      setNotes((all) => all.filter((n) => n._id !== activeId))
-      setActiveId(null)
-      setHistory(null)
+      dropNote(activeId)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  const leave = async () => {
+    if (!confirm('Remove this note from your list? The owner keeps it.')) return
+    try {
+      await api(`/api/notes/${activeId}/shares/${myId}`, { method: 'DELETE' })
+      dropNote(activeId)
     } catch (e) {
       setError(e.message)
     }
@@ -211,49 +282,47 @@ export default function App() {
     }
   }
 
-  if (!token) return <Auth onAuth={onAuth} api={api} theme={theme} onToggleTheme={toggleTheme} />
+  const openShare = async () => {
+    await flush()
+    setSharing(true)
+  }
 
-  const preview = history?.find((v) => v.id === selectedVersion)
+  if (!token) return (
+    <>
+      {error && <div className="error" onClick={() => setError('')}>{error}</div>}
+      <Auth onAuth={onAuth} api={api} theme={theme} onToggleTheme={toggleTheme} />
+    </>
+  )
 
   return (
     <div className={`app ${active ? 'has-active' : ''}`}>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
 
-      <aside>
-        <div className="side-head">
-          <div className="brand">notepad</div>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} />
-        </div>
-        <div className="search-row">
-          <input className="search" placeholder="Search notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <button className="primary new" onClick={addNote}>New note</button>
-        <ul>
-          {notes.map((n) => (
-            <li key={n._id} className={n._id === activeId ? 'active' : ''} onClick={() => select(n._id)}>
-              <div className="li-top"><strong>{n.title || 'Untitled'}</strong><time className="mono">{ago(n.updatedAt)}</time></div>
-              <small>{n.content.replace(/\s+/g, ' ').slice(0, 70) || 'No content'}</small>
-            </li>
-          ))}
-          {loading && <p className="empty">Loading…</p>}
-          {!loading && !notes.length && <p className="empty">{search ? 'Nothing matches.' : 'No notes yet.'}</p>}
-        </ul>
-        <div className="user">
-          <span className="uname mono">{session.username}</span>
-          <button className="text-btn" onClick={logout}>log out</button>
-        </div>
-      </aside>
+      <Sidebar
+        notes={notes} activeId={activeId} onSelect={select} onNew={addNote}
+        search={search} onSearch={setSearch} scope={scope} onScope={setScope}
+        loading={loading} username={session.username} onLogout={logout}
+        theme={theme} onToggleTheme={toggleTheme}
+      />
 
       <main>
         {active ? (
           <>
             <div className="toolbar">
               <button className="text-btn back" onClick={() => select(null)} aria-label="Back to notes">← notes</button>
-              <input ref={titleRef} className="title" value={active.title} onChange={(e) => edit('title', e.target.value)} placeholder="Untitled" />
+              <input ref={titleRef} className="title" value={active.title} readOnly={readOnly || !loaded} onChange={(e) => edit('title', e.target.value)} placeholder="Untitled" />
               <span className="status mono">{status}</span>
-              <button className={`text-btn ${history ? 'on' : ''}`} onClick={openHistory}>history</button>
-              <button className="text-btn danger" onClick={remove}>delete</button>
+              <button className={`text-btn ${history ? 'on' : ''}`} onClick={openHistory} disabled={!loaded}>history</button>
+              {active.role === 'owner' ? (
+                <>
+                  <button className="text-btn" onClick={openShare} disabled={!loaded}>share</button>
+                  <button className="text-btn danger" onClick={remove}>delete</button>
+                </>
+              ) : (
+                <button className="text-btn danger" onClick={leave}>leave</button>
+              )}
             </div>
+            {readOnly && <div className="notice">View only. <strong>{active.ownerName}</strong> shared this note with you as a viewer.</div>}
             {conflict?.id === activeId && (
               <div className="conflict">
                 <span><strong>{conflict.current.updatedBy || 'Someone'}</strong> saved a newer version of this note.</span>
@@ -263,49 +332,35 @@ export default function App() {
             )}
             <div className="editor-wrap">
               <div className="paper">
-                <textarea placeholder="Start writing…" value={active.content} onChange={(e) => edit('content', e.target.value)} />
+                {loaded ? (
+                  <textarea
+                    placeholder={readOnly ? '' : 'Start writing…'}
+                    value={active.content}
+                    readOnly={readOnly}
+                    onChange={(e) => edit('content', e.target.value)}
+                  />
+                ) : (
+                  <p className="empty paper-msg">Loading…</p>
+                )}
               </div>
               {history && (
-                <div className="history">
-                  <div className="h-head">
-                    <strong>History</strong>
-                    <button className="text-btn" onClick={() => setHistory(null)} aria-label="Close">close</button>
-                  </div>
-                  {history.length === 0 ? (
-                    <p className="empty">Nothing yet. Earlier versions show up as you keep editing.</p>
-                  ) : (
-                    <>
-                      <ul className="versions">
-                        {history.map((v) => (
-                          <li key={v.id} className={v.id === selectedVersion ? 'active' : ''} onClick={() => setSelectedVersion(v.id)}>
-                            <span className="mono">{toDate(v.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                            <small className="mono">{v.editedBy ? `${v.editedBy} · ` : ''}{words(v.content)}w</small>
-                          </li>
-                        ))}
-                      </ul>
-                      {preview && (
-                        <div className="preview">
-                          <h4>{preview.title}</h4>
-                          <pre>{preview.content || '(empty)'}</pre>
-                          <button className="primary" onClick={() => restore(preview.id)}>Restore this one</button>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
+                <HistoryPanel
+                  versions={history} selected={selectedVersion} onSelect={setSelectedVersion}
+                  onRestore={restore} canRestore={!readOnly} onClose={() => setHistory(null)}
+                />
               )}
             </div>
             <div className="foot">
-              <span className="mono">{words(active.content)} words, {active.content.length} chars</span>
+              <span className="mono">{loaded ? `${words(active.content)} words, ${active.content.length} chars` : ''}</span>
               <span className="mono">edited {ago(active.updatedAt)}{active.updatedBy ? ` by ${active.updatedBy}` : ''}</span>
             </div>
           </>
         ) : (
-          <div className="placeholder">
-            <p>Nothing open.</p>
-          </div>
+          <div className="placeholder"><p>Nothing open.</p></div>
         )}
       </main>
+
+      {sharing && active && <ShareDialog noteId={active._id} api={api} onClose={() => setSharing(false)} />}
     </div>
   )
 }

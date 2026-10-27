@@ -110,3 +110,19 @@ textarea::placeholder { color: var(--muted); font-style: italic; }
 .pw input { flex: 1; min-width: 0; border-bottom: 0; }
 .conflict { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--margin); background: var(--mark); font-size: .92rem; }
 .conflict span { flex: 1; }
+
+.tabs { display: flex; gap: 12px; padding: 10px 20px 0; flex-wrap: wrap; }
+.badge { color: var(--margin); font-size: .68rem; }
+.paper-msg { margin: 3rem auto; }
+.notice { padding: 8px 12px; border: 1px solid var(--border); background: var(--mark); font-size: .92rem; }
+.text-btn:disabled { opacity: .4; cursor: default; text-decoration: none; }
+
+.overlay { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .45); display: grid; place-items: center; padding: 16px; }
+.dialog { width: 100%; max-width: 460px; max-height: 85vh; overflow-y: auto; background: var(--paper); border: 1px solid var(--border); padding: 18px 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+.share-add { display: flex; gap: 8px; align-items: flex-end; }
+.share-add input { flex: 1; min-width: 0; }
+select { font-family: var(--mono); font-size: .78rem; background: var(--paper); border: 1px solid var(--border); padding: 7px 6px; border-radius: 3px; color: var(--ink); }
+.share-list { list-style: none; margin: 0; padding: 0; }
+.share-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.share-list li span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+button.primary:disabled { opacity: .45; cursor: default; }

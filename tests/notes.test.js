@@ -30,7 +30,7 @@ test("users cannot see, edit, delete or read history of each other's notes", asy
   assert.equal((await s.call('GET', `/api/notes/${id}/history`, { token: bob.token })).status, 404)
   assert.equal((await s.call('DELETE', `/api/notes/${id}`, { token: bob.token })).status, 404)
   const still = await s.call('GET', '/api/notes', { token: alice.token })
-  assert.ok(still.body.some((n) => n._id === id && n.content === 'secret'))
+  assert.ok(still.body.some((n) => n._id === id && n.preview === 'secret'))
 })
 
 test('rejects oversized and non-text input', async () => {

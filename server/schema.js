@@ -28,4 +28,12 @@ export const schema = [
   'ALTER TABLE notes ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1',
   'ALTER TABLE notes ADD COLUMN IF NOT EXISTS updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL',
   'ALTER TABLE note_versions ADD COLUMN IF NOT EXISTS edited_by INTEGER REFERENCES users(id) ON DELETE SET NULL',
+  // Per-note sharing
+  `CREATE TABLE IF NOT EXISTS note_shares (
+     note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+     PRIMARY KEY (note_id, user_id)
+   )`,
+  'CREATE INDEX IF NOT EXISTS shares_user ON note_shares (user_id)',
 ]
