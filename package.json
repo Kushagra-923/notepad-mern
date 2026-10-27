@@ -10,7 +10,8 @@
     "dev": "concurrently -n api,web \"node --watch server/index.js\" \"npm --prefix client run dev\"",
     "build": "npm --prefix client install && npm --prefix client run build",
     "start": "node server/index.js",
-    "test": "node --test --test-force-exit \"tests/*.test.js\""
+    "test": "node --test --test-force-exit \"tests/*.test.js\"",
+    "e2e": "node e2e/run-all.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.12",
@@ -24,6 +25,7 @@
     "sanitize-html": "^2.18.1"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0"
+    "concurrently": "^9.0.0",
+    "playwright-core": "^1.64.1"
   }
 }
