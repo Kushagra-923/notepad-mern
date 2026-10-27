@@ -2,7 +2,8 @@ import { Router } from 'express'
 import { query } from '../db.js'
 import { wrap, validateNote } from '../middleware.js'
 
-// Save the state a note had before an edit. Throttled so autosave doesn't create hundreds of versions.
+// Save the state a note had before an edit, credited to whoever wrote that state.
+// Throttled so autosave doesn't create hundreds of versions.
 const MIN_GAP_SECONDS = 30
 const MAX_VERSIONS = 50
 const snapshot = async (note, force = false) => {
@@ -13,7 +14,9 @@ const snapshot = async (note, force = false) => {
   )
   if (last && last.title === note.title && last.content === note.content) return
   if (!force && last && Number(last.age) < MIN_GAP_SECONDS) return
-  await query('INSERT INTO note_versions (note_id, title, content) VALUES ($1, $2, $3)', [note.id, note.title, note.content])
+  await query('INSERT INTO note_versions (note_id, title, content, edited_by) VALUES ($1, $2, $3, $4)', [
+    note.id, note.title, note.content, note.updated_by,
+  ])
   await query(
     'DELETE FROM note_versions WHERE note_id = $1 AND id NOT IN (SELECT id FROM note_versions WHERE note_id = $1 ORDER BY id DESC LIMIT $2)',
     [note.id, MAX_VERSIONS]
@@ -21,14 +24,19 @@ const snapshot = async (note, force = false) => {
 }
 
 const asId = (v) => (/^\d{1,9}$/.test(String(v)) ? Number(v) : null)
+
+// Aliases give the client its note shape
+const SELECT_NOTE = `
+  SELECT n.id AS "_id", n.title, n.content, n.version, n.updated_at AS "updatedAt", uu.username AS "updatedBy"
+  FROM notes n LEFT JOIN users uu ON uu.id = n.updated_by`
+const getNote = async (id) => (await query(`${SELECT_NOTE} WHERE n.id = $1`, [id]))[0]
+
 const ownNote = async (id, userId) => {
   const noteId = asId(id)
   if (noteId === null) return null
-  const [note] = await query('SELECT id, title, content FROM notes WHERE id = $1 AND owner_id = $2', [noteId, userId])
+  const [note] = await query('SELECT id, title, content, version, updated_by FROM notes WHERE id = $1 AND owner_id = $2', [noteId, userId])
   return note
 }
-// Aliases keep the client's note shape: _id, title, content, updatedAt
-const cols = 'id AS "_id", title, content, updated_at AS "updatedAt"'
 
 const router = Router()
 
@@ -37,7 +45,7 @@ router.get('/', wrap(async (req, res) => {
   const q = `%${String(req.query.q || '').trim().replace(/[\\%_]/g, '\\$&')}%`
   res.json(
     await query(
-      `SELECT ${cols} FROM notes WHERE owner_id = $1 AND (title ILIKE $2 OR content ILIKE $2) ORDER BY updated_at DESC, id DESC`,
+      `${SELECT_NOTE} WHERE n.owner_id = $1 AND (n.title ILIKE $2 OR n.content ILIKE $2) ORDER BY n.updated_at DESC, n.id DESC`,
       [req.userId, q]
     )
   )
@@ -45,29 +53,50 @@ router.get('/', wrap(async (req, res) => {
 
 router.post('/', validateNote, wrap(async (req, res) => {
   const { title = 'Untitled', content = '' } = req.body
-  const [note] = await query(
-    `INSERT INTO notes (owner_id, title, content) VALUES ($1, $2, $3) RETURNING ${cols}`,
-    [req.userId, String(title), String(content)]
+  const [{ id }] = await query(
+    'INSERT INTO notes (owner_id, updated_by, title, content) VALUES ($1, $1, $2, $3) RETURNING id',
+    [req.userId, title, content]
   )
-  res.status(201).json(note)
+  res.status(201).json(await getNote(id))
 }))
 
+router.get('/:id', wrap(async (req, res) => {
+  const note = await ownNote(req.params.id, req.userId)
+  if (!note) return res.status(404).json({ error: 'Not found' })
+  res.json(await getNote(note.id))
+}))
+
+// Saving requires the version the client last saw. If someone else saved in between, the
+// stale write is rejected with 409 and the current note, so nothing is silently overwritten.
 router.put('/:id', validateNote, wrap(async (req, res) => {
-  const { title = 'Untitled', content = '' } = req.body
+  const { title = 'Untitled', content = '', version } = req.body
+  if (!Number.isInteger(version)) return res.status(400).json({ error: 'version is required' })
   const existing = await ownNote(req.params.id, req.userId)
   if (!existing) return res.status(404).json({ error: 'Not found' })
-  if (existing.title !== String(title) || existing.content !== String(content)) {
-    await snapshot(existing)
-    await query('UPDATE notes SET title = $1, content = $2, updated_at = now() WHERE id = $3', [String(title), String(content), existing.id])
-  }
-  const [note] = await query(`SELECT ${cols} FROM notes WHERE id = $1`, [existing.id])
-  res.json(note)
+
+  const conflict = async () => res.status(409).json({ error: 'This note was changed by someone else', current: await getNote(existing.id) })
+  if (existing.version !== version) return conflict()
+  if (existing.title === title && existing.content === content) return res.json(await getNote(existing.id))
+
+  await snapshot(existing)
+  const updated = await query(
+    'UPDATE notes SET title = $1, content = $2, version = version + 1, updated_at = now(), updated_by = $3 WHERE id = $4 AND version = $5 RETURNING id',
+    [title, content, req.userId, existing.id, version]
+  )
+  if (!updated.length) return conflict() // lost a race with a concurrent save
+  res.json(await getNote(existing.id))
 }))
 
 router.get('/:id/history', wrap(async (req, res) => {
   const note = await ownNote(req.params.id, req.userId)
   if (!note) return res.status(404).json({ error: 'Not found' })
-  res.json(await query('SELECT id, title, content, created_at AS "createdAt" FROM note_versions WHERE note_id = $1 ORDER BY id DESC', [note.id]))
+  res.json(
+    await query(
+      `SELECT v.id, v.title, v.content, v.created_at AS "createdAt", u.username AS "editedBy"
+       FROM note_versions v LEFT JOIN users u ON u.id = v.edited_by WHERE v.note_id = $1 ORDER BY v.id DESC`,
+      [note.id]
+    )
+  )
 }))
 
 router.post('/:id/restore/:versionId', wrap(async (req, res) => {
@@ -78,9 +107,11 @@ router.post('/:id/restore/:versionId', wrap(async (req, res) => {
     : []
   if (!version) return res.status(404).json({ error: 'Not found' })
   await snapshot(note, true)
-  await query('UPDATE notes SET title = $1, content = $2, updated_at = now() WHERE id = $3', [version.title, version.content, note.id])
-  const [restored] = await query(`SELECT ${cols} FROM notes WHERE id = $1`, [note.id])
-  res.json(restored)
+  await query(
+    'UPDATE notes SET title = $1, content = $2, version = version + 1, updated_at = now(), updated_by = $3 WHERE id = $4',
+    [version.title, version.content, req.userId, note.id]
+  )
+  res.json(await getNote(note.id))
 }))
 
 router.delete('/:id', wrap(async (req, res) => {

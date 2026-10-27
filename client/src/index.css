@@ -108,3 +108,5 @@ textarea::placeholder { color: var(--muted); font-style: italic; }
 .pw { display: flex; align-items: baseline; gap: 8px; border-bottom: 1px solid var(--border); }
 .pw:focus-within { border-bottom-color: var(--ink); }
 .pw input { flex: 1; min-width: 0; border-bottom: 0; }
+.conflict { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--margin); background: var(--mark); font-size: .92rem; }
+.conflict span { flex: 1; }

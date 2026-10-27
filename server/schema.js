@@ -24,4 +24,8 @@ export const schema = [
      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   'CREATE INDEX IF NOT EXISTS versions_note ON note_versions (note_id, id DESC)',
+  // Optimistic concurrency + attribution
+  'ALTER TABLE notes ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE notes ADD COLUMN IF NOT EXISTS updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL',
+  'ALTER TABLE note_versions ADD COLUMN IF NOT EXISTS edited_by INTEGER REFERENCES users(id) ON DELETE SET NULL',
 ]

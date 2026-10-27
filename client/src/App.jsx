@@ -27,8 +27,13 @@ export default function App() {
   const [history, setHistory] = useState(null) // null = closed, array = open
   const [selectedVersion, setSelectedVersion] = useState(null)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
+  const [conflict, setConflict] = useState(null) // { id, current } when someone else saved first
+  const [loading, setLoading] = useState(true)
   const saveTimer = useRef()
-  const pending = useRef(null)
+  const saving = useRef(false)
+  const saveAgain = useRef(null)
+  const notesRef = useRef([])
+  const conflictRef = useRef(null)
   const titleRef = useRef()
   const token = session?.token
 
@@ -53,8 +58,9 @@ export default function App() {
       body: options?.body && JSON.stringify(options.body),
     })
     if (res.status === 401 && token) logout()
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText)
-    return res.json()
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw Object.assign(new Error(data?.error || res.statusText), { status: res.status, body: data })
+    return data
   }
 
   const onAuth = (data) => {
@@ -62,7 +68,15 @@ export default function App() {
     setSession(data)
   }
 
+  notesRef.current = notes
+  conflictRef.current = conflict
   const active = notes.find((n) => n._id === activeId)
+
+  // Update a note in state and in the ref at once, so a queued save sees the new version immediately
+  const patchNote = (id, patch) => {
+    notesRef.current = notesRef.current.map((n) => (n._id === id ? { ...n, ...patch } : n))
+    setNotes(notesRef.current)
+  }
 
   useEffect(() => {
     if (!token) return
@@ -70,16 +84,39 @@ export default function App() {
       api(`/api/notes?q=${encodeURIComponent(search)}`)
         .then((n) => { setNotes(n); setError('') })
         .catch(() => setError('Cannot reach the server'))
+        .finally(() => setLoading(false))
     }, 200)
     return () => clearTimeout(t)
   }, [search, token])
 
+  // Saves are serialized: each one sends the latest text with the latest known version
+  const save = async (id) => {
+    if (conflictRef.current?.id === id) return
+    if (saving.current) { saveAgain.current = id; return }
+    saving.current = true
+    try {
+      const n = notesRef.current.find((x) => x._id === id)
+      if (!n) return
+      const saved = await api(`/api/notes/${id}`, { method: 'PUT', body: { title: n.title, content: n.content, version: n.version } })
+      patchNote(id, { version: saved.version, updatedAt: saved.updatedAt, updatedBy: saved.updatedBy })
+      setStatus('Saved')
+    } catch (e) {
+      setStatus('')
+      if (e.status === 409) setConflict({ id, current: e.body.current })
+      else setError(e.message)
+    } finally {
+      saving.current = false
+      if (saveAgain.current) { const next = saveAgain.current; saveAgain.current = null; await save(next) }
+    }
+  }
+
   // Send any unsaved edit right away (used before switching notes / opening history)
   const flush = async () => {
+    if (!saveTimer.current) return
     clearTimeout(saveTimer.current)
-    const job = pending.current
-    pending.current = null
-    if (job) await job()
+    const id = saveTimer.current.id
+    saveTimer.current = null
+    await save(id)
   }
 
   const select = async (id) => {
@@ -107,29 +144,40 @@ export default function App() {
   }
 
   const edit = (field, value) => {
-    setNotes((all) => all.map((n) => (n._id === activeId ? { ...n, [field]: value } : n)))
+    patchNote(activeId, { [field]: value })
     setStatus('Saving…')
     clearTimeout(saveTimer.current)
-    const next = { title: active.title, content: active.content, [field]: value }
-    const id = active._id
-    pending.current = async () => {
-      try {
-        const saved = await api(`/api/notes/${id}`, { method: 'PUT', body: next })
-        setNotes((all) => all.map((n) => (n._id === id ? { ...n, updatedAt: saved.updatedAt } : n)))
-        setStatus('Saved')
-      } catch (e) {
-        setStatus('')
-        setError(e.message)
-      }
+    const id = activeId
+    const timer = setTimeout(() => { saveTimer.current = null; save(id) }, 500)
+    timer.id = id
+    saveTimer.current = timer
+  }
+
+  const keepMine = async () => {
+    const { id, current } = conflict
+    const n = notesRef.current.find((x) => x._id === id)
+    try {
+      const saved = await api(`/api/notes/${id}`, { method: 'PUT', body: { title: n.title, content: n.content, version: current.version } })
+      patchNote(id, { version: saved.version, updatedAt: saved.updatedAt, updatedBy: saved.updatedBy })
+      setConflict(null)
+      setStatus('Saved')
+    } catch (e) {
+      if (e.status === 409) setConflict({ id, current: e.body.current })
+      else setError(e.message)
     }
-    saveTimer.current = setTimeout(() => { const job = pending.current; pending.current = null; job?.() }, 500)
+  }
+
+  const useTheirs = () => {
+    patchNote(conflict.id, conflict.current)
+    setConflict(null)
+    setStatus('')
   }
 
   const remove = async () => {
     if (!confirm('Delete this note and its history?')) return
     try {
       clearTimeout(saveTimer.current)
-      pending.current = null
+      saveTimer.current = null
       await api(`/api/notes/${activeId}`, { method: 'DELETE' })
       setNotes((all) => all.filter((n) => n._id !== activeId))
       setActiveId(null)
@@ -154,7 +202,8 @@ export default function App() {
   const restore = async (versionId) => {
     try {
       const note = await api(`/api/notes/${activeId}/restore/${versionId}`, { method: 'POST' })
-      setNotes((all) => all.map((n) => (n._id === note._id ? note : n)))
+      patchNote(note._id, note)
+      setConflict(null)
       setHistory(await api(`/api/notes/${activeId}/history`))
       setStatus('Restored')
     } catch (e) {
@@ -186,7 +235,8 @@ export default function App() {
               <small>{n.content.replace(/\s+/g, ' ').slice(0, 70) || 'No content'}</small>
             </li>
           ))}
-          {!notes.length && <p className="empty">{search ? 'Nothing matches.' : 'No notes yet.'}</p>}
+          {loading && <p className="empty">Loading…</p>}
+          {!loading && !notes.length && <p className="empty">{search ? 'Nothing matches.' : 'No notes yet.'}</p>}
         </ul>
         <div className="user">
           <span className="uname mono">{session.username}</span>
@@ -204,6 +254,13 @@ export default function App() {
               <button className={`text-btn ${history ? 'on' : ''}`} onClick={openHistory}>history</button>
               <button className="text-btn danger" onClick={remove}>delete</button>
             </div>
+            {conflict?.id === activeId && (
+              <div className="conflict">
+                <span><strong>{conflict.current.updatedBy || 'Someone'}</strong> saved a newer version of this note.</span>
+                <button className="text-btn" onClick={useTheirs}>use theirs</button>
+                <button className="text-btn" onClick={keepMine}>keep mine</button>
+              </div>
+            )}
             <div className="editor-wrap">
               <div className="paper">
                 <textarea placeholder="Start writing…" value={active.content} onChange={(e) => edit('content', e.target.value)} />
@@ -222,7 +279,7 @@ export default function App() {
                         {history.map((v) => (
                           <li key={v.id} className={v.id === selectedVersion ? 'active' : ''} onClick={() => setSelectedVersion(v.id)}>
                             <span className="mono">{toDate(v.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                            <small className="mono">{words(v.content)}w</small>
+                            <small className="mono">{v.editedBy ? `${v.editedBy} · ` : ''}{words(v.content)}w</small>
                           </li>
                         ))}
                       </ul>
@@ -240,7 +297,7 @@ export default function App() {
             </div>
             <div className="foot">
               <span className="mono">{words(active.content)} words, {active.content.length} chars</span>
-              <span className="mono">edited {ago(active.updatedAt)}</span>
+              <span className="mono">edited {ago(active.updatedAt)}{active.updatedBy ? ` by ${active.updatedBy}` : ''}</span>
             </div>
           </>
         ) : (
