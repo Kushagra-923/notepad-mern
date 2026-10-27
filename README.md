@@ -3,6 +3,8 @@
 **Live app:** https://notepad-wf1v.onrender.com
 (free hosting: the first request after a quiet period can take about 30 seconds while it wakes up)
 
+**Demo video:** https://drive.google.com/file/d/1Cn_NvLlS3v0oCPm4wnyRQu4Uo2DJPV8m/view?usp=sharing
+
 A notes app where a group can write together: private notes, notes shared with specific people, and team workspaces, with highlighting, version history and safe handling of simultaneous edits.
 
 Author: Kushagra Shukla
