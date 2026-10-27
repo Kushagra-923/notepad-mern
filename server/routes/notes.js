@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { query } from '../db.js'
-import { wrap } from '../middleware.js'
+import { wrap, validateNote } from '../middleware.js'
 
 // Save the state a note had before an edit. Throttled so autosave doesn't create hundreds of versions.
 const MIN_GAP_SECONDS = 30
@@ -43,7 +43,7 @@ router.get('/', wrap(async (req, res) => {
   )
 }))
 
-router.post('/', wrap(async (req, res) => {
+router.post('/', validateNote, wrap(async (req, res) => {
   const { title = 'Untitled', content = '' } = req.body
   const [note] = await query(
     `INSERT INTO notes (owner_id, title, content) VALUES ($1, $2, $3) RETURNING ${cols}`,
@@ -52,7 +52,7 @@ router.post('/', wrap(async (req, res) => {
   res.status(201).json(note)
 }))
 
-router.put('/:id', wrap(async (req, res) => {
+router.put('/:id', validateNote, wrap(async (req, res) => {
   const { title = 'Untitled', content = '' } = req.body
   const existing = await ownNote(req.params.id, req.userId)
   if (!existing) return res.status(404).json({ error: 'Not found' })

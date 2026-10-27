@@ -25,3 +25,14 @@ export const errorHandler = (err, req, res, next) => {
   console.error(err)
   res.status(500).json({ error: 'Server error' })
 }
+
+export const LIMITS = { title: 200, content: 200_000 }
+
+export const validateNote = (req, res, next) => {
+  const { title = 'Untitled', content = '' } = req.body || {}
+  if (typeof title !== 'string' || typeof content !== 'string')
+    return res.status(400).json({ error: 'Title and content must be text' })
+  if (title.length > LIMITS.title) return res.status(400).json({ error: `Title is too long (max ${LIMITS.title} characters)` })
+  if (content.length > LIMITS.content) return res.status(400).json({ error: `Note is too long (max ${LIMITS.content} characters)` })
+  next()
+}

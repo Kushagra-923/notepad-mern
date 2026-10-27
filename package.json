@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "concurrently -n api,web \"node --watch server/index.js\" \"npm --prefix client run dev\"",
     "build": "npm --prefix client install && npm --prefix client run build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test --test-force-exit \"tests/*.test.js\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.12",
