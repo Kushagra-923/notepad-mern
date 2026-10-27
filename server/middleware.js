@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken'
+import { query } from './db.js'
 
 export const SECRET = process.env.JWT_SECRET
 
@@ -7,17 +8,22 @@ export const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next)
 
 export const sign = (user) => jwt.sign({ sub: user.id, username: user.username }, SECRET, { expiresIn: '7d' })
 
-export const requireAuth = (req, res, next) => {
+// A valid signature is not enough: the account must still exist. After a database reset or restore,
+// old tokens would otherwise pass and then fail on foreign keys. They get a 401 so the client signs out.
+export const requireAuth = wrap(async (req, res, next) => {
   const token = (req.headers.authorization || '').replace(/^Bearer /, '')
+  let payload
   try {
-    const payload = jwt.verify(token, SECRET)
-    req.userId = payload.sub
-    req.username = payload.username
-    next()
+    payload = jwt.verify(token, SECRET)
   } catch {
-    res.status(401).json({ error: 'Please log in' })
+    return res.status(401).json({ error: 'Please log in' })
   }
-}
+  const [user] = await query('SELECT id, username FROM users WHERE id = $1', [payload.sub])
+  if (!user) return res.status(401).json({ error: 'Please log in' })
+  req.userId = user.id
+  req.username = user.username
+  next()
+})
 
 export const errorHandler = (err, req, res, next) => {
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' })

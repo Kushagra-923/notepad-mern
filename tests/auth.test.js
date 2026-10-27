@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import jwt from 'jsonwebtoken'
 import { startServer, signup } from './helpers.js'
 
 let s
@@ -55,4 +56,11 @@ test('unknown API routes return JSON 404', async () => {
   const res = await s.call('GET', '/api/does-not-exist')
   assert.equal(res.status, 404)
   assert.equal(res.body.error, 'Not found')
+})
+
+test('a valid token for an account that no longer exists is rejected with 401', async () => {
+  const ghost = jwt.sign({ sub: 987654, username: 'ghost' }, process.env.JWT_SECRET, { expiresIn: '1h' })
+  assert.equal((await s.call('GET', '/api/notes', { token: ghost })).status, 401)
+  assert.equal((await s.call('POST', '/api/notes', { token: ghost, body: { title: 'x' } })).status, 401)
+  assert.equal((await s.call('GET', '/api/teams', { token: ghost })).status, 401)
 })
