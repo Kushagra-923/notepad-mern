@@ -1,4 +1,4 @@
-import { toDate, words } from './lib.js'
+import { toDate, words, textOf } from './lib.js'
 
 export default function HistoryPanel({ versions, selected, onSelect, onRestore, canRestore, onClose }) {
   const preview = versions.find((v) => v.id === selected)
@@ -16,14 +16,16 @@ export default function HistoryPanel({ versions, selected, onSelect, onRestore, 
             {versions.map((v) => (
               <li key={v.id} className={v.id === selected ? 'active' : ''} onClick={() => onSelect(v.id)}>
                 <span className="mono">{toDate(v.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                <small className="mono">{v.editedBy ? `${v.editedBy} · ` : ''}{words(v.content)}w</small>
+                <small className="mono">{v.editedBy ? `${v.editedBy} · ` : ''}{words(textOf(v.content))}w</small>
               </li>
             ))}
           </ul>
           {preview && (
             <div className="preview">
               <h4>{preview.title}</h4>
-              <pre>{preview.content || '(empty)'}</pre>
+              {preview.content
+                ? <div className="preview-body rich" dangerouslySetInnerHTML={{ __html: preview.content }} />
+                : <div className="preview-body"><em>(empty)</em></div>}
               {canRestore
                 ? <button className="primary" onClick={() => onRestore(preview.id)}>Restore this one</button>
                 : <p className="muted mono">View only: you can't restore versions.</p>}

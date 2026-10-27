@@ -31,7 +31,7 @@ export const VISIBLE = '(n.owner_id = $1 OR s.user_id IS NOT NULL OR tm.user_id 
 // The shape sent to clients. $1 is always the requesting user's id.
 // `full` includes the whole content; the list view only needs a short preview.
 export const noteSelect = (full = true) => `
-  SELECT n.id AS "_id", n.title, ${full ? 'n.content' : 'left(n.content, 200) AS preview'}, n.version,
+  SELECT n.id AS "_id", n.title, ${full ? 'n.content' : 'left(n.content_text, 200) AS preview'}, n.version,
          n.updated_at AS "updatedAt", uu.username AS "updatedBy", ou.username AS "ownerName",
          n.team_id AS "teamId", t.name AS "teamName", ${ROLE_SQL} AS role
   ${JOINS}`

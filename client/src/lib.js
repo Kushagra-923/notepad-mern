@@ -14,3 +14,10 @@ export const words = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0)
 export const userIdOf = (token) => {
   try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sub } catch { return null }
 }
+
+// Plain text of a note's HTML. DOMParser builds an inert document, so nothing in the markup can run.
+export const textOf = (html) => {
+  if (!html) return ''
+  const spaced = html.replace(/<\/(p|h[1-3]|li|blockquote|pre)>|<br\s*\/?>/gi, ' $&')
+  return (new DOMParser().parseFromString(spaced, 'text/html').body.textContent || '').replace(/\s+/g, ' ').trim()
+}

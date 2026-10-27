@@ -1,5 +1,5 @@
 import ThemeToggle from './ThemeToggle.jsx'
-import { ago } from './lib.js'
+import { ago, textOf } from './lib.js'
 
 const SCOPES = [['all', 'all'], ['mine', 'mine'], ['shared', 'shared with me']]
 
@@ -27,7 +27,7 @@ export default function Sidebar({ notes, teams, activeId, onSelect, onNew, searc
         {notes.map((n) => (
           <li key={n._id} className={n._id === activeId ? 'active' : ''} onClick={() => onSelect(n._id)}>
             <div className="li-top"><strong>{n.title || 'Untitled'}</strong><time className="mono">{ago(n.updatedAt)}</time></div>
-            <small>{(n.content ?? n.preview ?? '').replace(/\s+/g, ' ').slice(0, 70) || 'No content'}</small>
+            <small>{(n.content !== undefined ? textOf(n.content) : n.preview ?? '').slice(0, 70) || 'No content'}</small>
             {n.teamName
               ? <span className="badge mono">team · {n.teamName}</span>
               : n.role !== 'owner' && <span className="badge mono">{n.role} · from {n.ownerName}</span>}

@@ -25,7 +25,7 @@ test('a viewer can read and see history but cannot edit, delete, or manage shari
   assert.equal(entry.ownerName, 'alice')
   assert.equal(entry.content, undefined) // lists only carry a preview
 
-  assert.equal((await s.call('GET', `/api/notes/${note._id}`, { token: bob.token })).body.content, 'v1')
+  assert.equal((await s.call('GET', `/api/notes/${note._id}`, { token: bob.token })).body.content, '<p>v1</p>')
   assert.equal((await s.call('GET', `/api/notes/${note._id}/history`, { token: bob.token })).status, 200)
   assert.equal((await s.call('PUT', `/api/notes/${note._id}`, { token: bob.token, body: { title: 'x', content: 'y', version: note.version } })).status, 403)
   assert.equal((await s.call('POST', `/api/notes/${note._id}/restore/1`, { token: bob.token })).status, 403)
@@ -43,7 +43,7 @@ test('an editor can edit and is credited, but cannot delete', async () => {
   assert.equal(edit.body.role, 'editor')
 
   const seenByOwner = await s.call('GET', `/api/notes/${note._id}`, { token: alice.token })
-  assert.equal(seenByOwner.body.content, 'draft + bob')
+  assert.equal(seenByOwner.body.content, '<p>draft + bob</p>')
   assert.equal(seenByOwner.body.updatedBy, 'bob')
 
   assert.equal((await s.call('DELETE', `/api/notes/${note._id}`, { token: bob.token })).status, 403)
@@ -51,7 +51,7 @@ test('an editor can edit and is credited, but cannot delete', async () => {
   // history credits the author of each earlier state
   await s.call('PUT', `/api/notes/${note._id}`, { token: alice.token, body: { title: 'Team notes', content: 'alice again', version: edit.body.version } })
   const history = (await s.call('GET', `/api/notes/${note._id}/history`, { token: alice.token })).body
-  assert.ok(history.some((v) => v.content === 'draft + bob' && v.editedBy === 'bob'))
+  assert.ok(history.some((v) => v.content === '<p>draft + bob</p>' && v.editedBy === 'bob'))
 })
 
 test('people the note was not shared with get 404', async () => {
@@ -69,7 +69,7 @@ test('two collaborators editing from the same version: the second gets a conflic
   assert.equal(a.status, 200)
   const b = await s.call('PUT', `/api/notes/${note._id}`, { token: bob.token, body: { title: 'Race', content: 'bob loses', version: note.version } })
   assert.equal(b.status, 409)
-  assert.equal(b.body.current.content, 'alice wins')
+  assert.equal(b.body.current.content, '<p>alice wins</p>')
   assert.equal(b.body.current.updatedBy, 'alice')
 })
 

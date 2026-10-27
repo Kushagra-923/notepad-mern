@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { query } from '../db.js'
 import { wrap, validateNote } from '../middleware.js'
+import { cleanContent, toText } from '../sanitize.js'
 import { withNote, noteSelect, getNoteFor, VISIBLE, asId } from '../access.js'
 
 // Save the state a note had before an edit, credited to whoever wrote that state.
@@ -41,22 +42,23 @@ router.get('/', wrap(async (req, res) => {
   const { sql, params } = scopeClause(req.query.scope)
   res.json(
     await query(
-      `${noteSelect(false)} WHERE ${sql} AND (n.title ILIKE $2 OR n.content ILIKE $2) ORDER BY n.updated_at DESC, n.id DESC`,
+      `${noteSelect(false)} WHERE ${sql} AND (n.title ILIKE $2 OR n.content_text ILIKE $2) ORDER BY n.updated_at DESC, n.id DESC`,
       [req.userId, q, ...params]
     )
   )
 }))
 
 router.post('/', validateNote, wrap(async (req, res) => {
-  const { title = 'Untitled', content = '', teamId = null } = req.body
+  const { title = 'Untitled', teamId = null } = req.body
+  const content = cleanContent(req.body.content || '')
   if (teamId !== null) {
     const id = asId(teamId)
     const [member] = id === null ? [] : await query('SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2', [id, req.userId])
     if (!member) return res.status(403).json({ error: 'You are not a member of that team' })
   }
   const [{ id }] = await query(
-    'INSERT INTO notes (owner_id, updated_by, title, content, team_id) VALUES ($1, $1, $2, $3, $4) RETURNING id',
-    [req.userId, title, content, teamId]
+    'INSERT INTO notes (owner_id, updated_by, title, content, content_text, team_id) VALUES ($1, $1, $2, $3, $4, $5) RETURNING id',
+    [req.userId, title, content, toText(content), teamId]
   )
   res.status(201).json(await getNoteFor(id, req.userId))
 }))
@@ -68,7 +70,8 @@ router.get('/:id', withNote('viewer'), wrap(async (req, res) => {
 // Saving requires the version the client last saw. If someone else saved in between, the
 // stale write is rejected with 409 and the current note, so nothing is silently overwritten.
 router.put('/:id', validateNote, withNote('editor'), wrap(async (req, res) => {
-  const { title = 'Untitled', content = '', version } = req.body
+  const { title = 'Untitled', version } = req.body
+  const content = cleanContent(req.body.content || '')
   if (!Number.isInteger(version)) return res.status(400).json({ error: 'version is required' })
   const existing = req.note
 
@@ -79,8 +82,8 @@ router.put('/:id', validateNote, withNote('editor'), wrap(async (req, res) => {
 
   await snapshot(existing, existing.updated_by !== req.userId)
   const updated = await query(
-    'UPDATE notes SET title = $1, content = $2, version = version + 1, updated_at = now(), updated_by = $3 WHERE id = $4 AND version = $5 RETURNING id',
-    [title, content, req.userId, existing.id, version]
+    'UPDATE notes SET title = $1, content = $2, content_text = $3, version = version + 1, updated_at = now(), updated_by = $4 WHERE id = $5 AND version = $6 RETURNING id',
+    [title, content, toText(content), req.userId, existing.id, version]
   )
   if (!updated.length) return conflict() // lost a race with a concurrent save
   res.json(await getNoteFor(existing.id, req.userId))
@@ -104,8 +107,8 @@ router.post('/:id/restore/:versionId', withNote('editor'), wrap(async (req, res)
   if (!version) return res.status(404).json({ error: 'Not found' })
   await snapshot(req.note, true)
   await query(
-    'UPDATE notes SET title = $1, content = $2, version = version + 1, updated_at = now(), updated_by = $3 WHERE id = $4',
-    [version.title, version.content, req.userId, req.note.id]
+    'UPDATE notes SET title = $1, content = $2, content_text = $3, version = version + 1, updated_at = now(), updated_by = $4 WHERE id = $5',
+    [version.title, version.content, toText(version.content), req.userId, req.note.id]
   )
   res.json(await getNoteFor(req.note.id, req.userId))
 }))

@@ -4,7 +4,8 @@ import Sidebar from './Sidebar.jsx'
 import HistoryPanel from './HistoryPanel.jsx'
 import ShareDialog from './ShareDialog.jsx'
 import TeamsDialog from './TeamsDialog.jsx'
-import { ago, words, userIdOf } from './lib.js'
+import Editor from './Editor.jsx'
+import { ago, words, textOf, userIdOf } from './lib.js'
 
 const loadSession = () => {
   try { return JSON.parse(localStorage.getItem('session')) } catch { return null }
@@ -352,18 +353,11 @@ export default function App() {
               </div>
             )}
             <div className="editor-wrap">
-              <div className="paper">
-                {loaded ? (
-                  <textarea
-                    placeholder={readOnly ? '' : 'Start writing…'}
-                    value={active.content}
-                    readOnly={readOnly}
-                    onChange={(e) => edit('content', e.target.value)}
-                  />
-                ) : (
-                  <p className="empty paper-msg">Loading…</p>
-                )}
-              </div>
+              {loaded ? (
+                <Editor noteId={active._id} content={active.content} editable={!readOnly} onChange={(html) => edit('content', html)} />
+              ) : (
+                <div className="editor-col"><div className="paper"><p className="empty paper-msg">Loading…</p></div></div>
+              )}
               {history && (
                 <HistoryPanel
                   versions={history} selected={selectedVersion} onSelect={setSelectedVersion}
@@ -372,7 +366,7 @@ export default function App() {
               )}
             </div>
             <div className="foot">
-              <span className="mono">{loaded ? `${words(active.content)} words, ${active.content.length} chars` : ''}</span>
+              <span className="mono">{loaded ? `${words(textOf(active.content))} ${words(textOf(active.content)) === 1 ? 'word' : 'words'}` : ''}</span>
               <span className="mono">edited {ago(active.updatedAt)}{active.updatedBy ? ` by ${active.updatedBy}` : ''}</span>
             </div>
           </>

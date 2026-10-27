@@ -53,4 +53,7 @@ export const schema = [
   // Deleting a team turns its notes back into personal notes of whoever created them
   'ALTER TABLE notes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL',
   'CREATE INDEX IF NOT EXISTS notes_team ON notes (team_id)',
+  // Rich text: content is sanitized HTML; content_text is a plain copy for search and previews
+  "ALTER TABLE notes ADD COLUMN IF NOT EXISTS content_text TEXT NOT NULL DEFAULT ''",
+  "UPDATE notes SET content_text = content WHERE content_text = '' AND content <> '' AND content NOT LIKE '%<%'",
 ]

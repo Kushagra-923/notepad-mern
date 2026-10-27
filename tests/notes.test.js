@@ -15,7 +15,7 @@ test('creates, lists, edits and deletes a note', async () => {
   assert.equal(created.status, 201)
   const id = created.body._id
   const edited = await s.call('PUT', `/api/notes/${id}`, { token: alice.token, body: { title: 'Plan', content: 'second', version: created.body.version } })
-  assert.equal(edited.body.content, 'second')
+  assert.equal(edited.body.content, '<p>second</p>')
   const list = await s.call('GET', '/api/notes?q=SECOND', { token: alice.token })
   assert.equal(list.body.length, 1)
   assert.equal((await s.call('DELETE', `/api/notes/${id}`, { token: alice.token })).status, 200)
@@ -51,9 +51,9 @@ test('history keeps earlier versions and restore brings one back', async () => {
   await s.call('PUT', `/api/notes/${note._id}`, { token: alice.token, body: { title: 'H', content: 'two', version: note.version } })
   const history = await s.call('GET', `/api/notes/${note._id}/history`, { token: alice.token })
   assert.equal(history.body.length, 1)
-  assert.equal(history.body[0].content, 'one')
+  assert.equal(history.body[0].content, '<p>one</p>')
   const restored = await s.call('POST', `/api/notes/${note._id}/restore/${history.body[0].id}`, { token: alice.token })
-  assert.equal(restored.body.content, 'one')
+  assert.equal(restored.body.content, '<p>one</p>')
 })
 
 test('a stale save is rejected with 409 and does not overwrite newer work', async () => {
@@ -64,11 +64,11 @@ test('a stale save is rejected with 409 and does not overwrite newer work', asyn
 
   const stale = await s.call('PUT', `/api/notes/${note._id}`, { token: alice.token, body: { title: 'C', content: 'stale edit', version: note.version } })
   assert.equal(stale.status, 409)
-  assert.equal(stale.body.current.content, 'first edit')
+  assert.equal(stale.body.current.content, '<p>first edit</p>')
   assert.equal(stale.body.current.version, first.body.version)
 
   const after = await s.call('GET', `/api/notes/${note._id}`, { token: alice.token })
-  assert.equal(after.body.content, 'first edit')
+  assert.equal(after.body.content, '<p>first edit</p>')
 })
 
 test('a save without a version is rejected', async () => {
