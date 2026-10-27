@@ -2,7 +2,7 @@ services:
   - type: web
     name: notepad
     runtime: node
-    plan: starter            # persistent disks need a paid plan
+    plan: free
     buildCommand: npm install && npm --prefix client install --include=dev && npm --prefix client run build
     startCommand: npm start
     healthCheckPath: /api/auth/config
@@ -11,11 +11,5 @@ services:
         value: 24
       - key: JWT_SECRET
         generateValue: true
-      - key: DB_FILE
-        value: /var/data/notes.db
       - key: GOOGLE_CLIENT_ID
         sync: false
-    disk:
-      name: notes-data
-      mountPath: /var/data
-      sizeGB: 1
