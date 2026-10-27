@@ -6,7 +6,7 @@ const load = () => {
   try { return JSON.parse(localStorage.getItem('session')) } catch { return null }
 }
 
-const toDate = (s) => new Date(s)
+const toDate = (s) => new Date(s.replace(' ', 'T') + 'Z')
 const ago = (s) => {
   const sec = Math.max(0, (Date.now() - toDate(s)) / 1000)
   if (sec < 60) return 'just now'

@@ -1,6 +1,8 @@
 import 'dotenv/config'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { DatabaseSync } from 'node:sqlite'
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
@@ -16,82 +18,72 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const dbFile = process.env.DB_FILE || path.join(here, 'notes.db')
+fs.mkdirSync(path.dirname(dbFile), { recursive: true })
 
-// ---------- Database ----------
-// Production: Postgres via DATABASE_URL (e.g. Neon). Local dev without it: PGlite (embedded Postgres, stored in ./data).
-let query
-if (process.env.DATABASE_URL) {
-  const { default: pg } = await import('pg')
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
-  query = async (text, params) => (await pool.query(text, params)).rows
-} else {
-  const { PGlite } = await import('@electric-sql/pglite')
-  const lite = new PGlite(process.env.PGLITE_DIR || path.join(here, '../data/pgdata'))
-  await lite.waitReady
-  query = async (text, params) => (await lite.query(text, params)).rows
+const db = new DatabaseSync(dbFile)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    passwordHash TEXT NOT NULL
+  )
+`)
+// Google sign-in columns (added after the first release)
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'googleId')) {
+  db.exec('ALTER TABLE users ADD COLUMN googleId TEXT')
+  db.exec('ALTER TABLE users ADD COLUMN email TEXT')
 }
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_googleId ON users(googleId)')
 
-for (const statement of [
-  `CREATE TABLE IF NOT EXISTS users (
-     id SERIAL PRIMARY KEY,
-     username TEXT NOT NULL,
-     password_hash TEXT NOT NULL DEFAULT '',
-     google_id TEXT UNIQUE,
-     email TEXT
-   )`,
-  'CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower ON users (lower(username))',
-  `CREATE TABLE IF NOT EXISTS notes (
-     id SERIAL PRIMARY KEY,
-     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-     title TEXT NOT NULL DEFAULT 'Untitled',
-     content TEXT NOT NULL DEFAULT '',
-     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-   )`,
-  'CREATE INDEX IF NOT EXISTS notes_user ON notes (user_id, updated_at DESC)',
-  `CREATE TABLE IF NOT EXISTS note_versions (
-     id SERIAL PRIMARY KEY,
-     note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-     title TEXT NOT NULL,
-     content TEXT NOT NULL,
-     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-   )`,
-  'CREATE INDEX IF NOT EXISTS versions_note ON note_versions (note_id, id DESC)',
-]) await query(statement)
+// Early versions had no owner column; those notes belonged to nobody, so start fresh
+if (!db.prepare('PRAGMA table_info(notes)').all().some((c) => c.name === 'userId')) {
+  db.exec('DROP TABLE IF EXISTS notes')
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'Untitled',
+    content TEXT NOT NULL DEFAULT '',
+    updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )
+`)
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS note_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    noteId INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )
+`)
 
 // Save the state a note had before an edit. Throttled so autosave doesn't create hundreds of versions.
 const MIN_GAP_SECONDS = 30
 const MAX_VERSIONS = 50
-const snapshot = async (note, force = false) => {
+const snapshot = (note, force = false) => {
   if (note.title === 'Untitled' && !note.content) return
-  const [last] = await query(
-    'SELECT title, content, EXTRACT(EPOCH FROM (now() - created_at)) AS age FROM note_versions WHERE note_id = $1 ORDER BY id DESC LIMIT 1',
-    [note.id]
-  )
+  const last = db
+    .prepare("SELECT title, content, strftime('%s','now') - strftime('%s', createdAt) AS age FROM note_versions WHERE noteId = ? ORDER BY id DESC LIMIT 1")
+    .get(note.id)
   if (last && last.title === note.title && last.content === note.content) return
-  if (!force && last && Number(last.age) < MIN_GAP_SECONDS) return
-  await query('INSERT INTO note_versions (note_id, title, content) VALUES ($1, $2, $3)', [note.id, note.title, note.content])
-  await query(
-    'DELETE FROM note_versions WHERE note_id = $1 AND id NOT IN (SELECT id FROM note_versions WHERE note_id = $1 ORDER BY id DESC LIMIT $2)',
-    [note.id, MAX_VERSIONS]
-  )
+  if (!force && last && last.age < MIN_GAP_SECONDS) return
+  db.prepare('INSERT INTO note_versions (noteId, title, content) VALUES (?, ?, ?)').run(note.id, note.title, note.content)
+  db.prepare('DELETE FROM note_versions WHERE noteId = ? AND id NOT IN (SELECT id FROM note_versions WHERE noteId = ? ORDER BY id DESC LIMIT ?)')
+    .run(note.id, note.id, MAX_VERSIONS)
 }
+const ownNote = (id, userId) => db.prepare('SELECT id, title, content FROM notes WHERE id = ? AND userId = ?').get(id, userId)
 
-const asId = (v) => (/^\d{1,9}$/.test(String(v)) ? Number(v) : null)
-const ownNote = async (id, userId) => {
-  const noteId = asId(id)
-  if (noteId === null) return null
-  const [note] = await query('SELECT id, title, content FROM notes WHERE id = $1 AND user_id = $2', [noteId, userId])
-  return note
-}
-// Aliases keep the client's note shape: _id, title, content, updatedAt
-const cols = 'id AS "_id", title, content, updated_at AS "updatedAt"'
-
+// "id AS _id" keeps the client's note shape unchanged
+const cols = 'id AS _id, title, content, updatedAt'
 const app = express()
 app.use(express.json({ limit: '1mb' }))
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next)
 
 // ---------- Authentication ----------
-const sign = (user) => jwt.sign({ sub: user.id, username: user.username }, SECRET, { expiresIn: '7d' })
+const sign = (user) =>
+  jwt.sign({ sub: user.id, username: user.username }, SECRET, { expiresIn: '7d' })
 
 const credentials = (req, res, next) => {
   const { username, password } = req.body || {}
@@ -102,31 +94,28 @@ const credentials = (req, res, next) => {
   next()
 }
 
-app.post('/api/auth/register', credentials, wrap(async (req, res) => {
+app.post('/api/auth/register', credentials, (req, res) => {
   const { username, password } = req.body
-  try {
-    const [user] = await query(
-      'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username',
-      [username, await bcrypt.hash(password, 10)]
-    )
-    res.status(201).json({ token: sign(user), username: user.username })
-  } catch (e) {
-    if (e.code === '23505') return res.status(409).json({ error: 'Username already taken' })
-    throw e
-  }
-}))
+  if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username))
+    return res.status(409).json({ error: 'Username already taken' })
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO users (username, passwordHash) VALUES (?, ?)')
+    .run(username, bcrypt.hashSync(password, 10))
+  const user = { id: Number(lastInsertRowid), username }
+  res.status(201).json({ token: sign(user), username })
+})
 
-app.post('/api/auth/login', credentials, wrap(async (req, res) => {
+app.post('/api/auth/login', credentials, (req, res) => {
   const { username, password } = req.body
-  const [user] = await query('SELECT id, username, password_hash FROM users WHERE lower(username) = lower($1)', [username])
-  if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash)))
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+  if (!user || !user.passwordHash || !bcrypt.compareSync(password, user.passwordHash))
     return res.status(401).json({ error: 'Invalid username or password' })
   res.json({ token: sign(user), username: user.username })
-}))
+})
 
 app.get('/api/auth/config', (req, res) => res.json({ googleClientId: GOOGLE_CLIENT_ID }))
 
-app.post('/api/auth/google', wrap(async (req, res) => {
+app.post('/api/auth/google', async (req, res) => {
   if (!googleClient) return res.status(501).json({ error: 'Google sign-in is not configured' })
   let payload
   try {
@@ -137,24 +126,25 @@ app.post('/api/auth/google', wrap(async (req, res) => {
   }
   if (!payload.email_verified) return res.status(401).json({ error: 'Google email is not verified' })
 
-  let [user] = await query('SELECT id, username FROM users WHERE google_id = $1', [payload.sub])
+  let user = db.prepare('SELECT * FROM users WHERE googleId = ?').get(payload.sub)
   if (!user) {
     const base = (payload.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'user').slice(0, 24)
     let username = base
-    for (let i = 1; (await query('SELECT 1 FROM users WHERE lower(username) = lower($1)', [username])).length; i++) username = `${base}${i}`
-    ;[user] = await query(
-      'INSERT INTO users (username, google_id, email) VALUES ($1, $2, $3) RETURNING id, username',
-      [username, payload.sub, payload.email]
-    )
+    for (let i = 1; db.prepare('SELECT 1 FROM users WHERE username = ?').get(username); i++) username = `${base}${i}`
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO users (username, passwordHash, googleId, email) VALUES (?, '', ?, ?)")
+      .run(username, payload.sub, payload.email)
+    user = { id: Number(lastInsertRowid), username }
   }
   res.json({ token: sign(user), username: user.username })
-}))
+})
 
 // ---------- Authorization: every /api/notes route requires a valid token ----------
 const requireAuth = (req, res, next) => {
   const token = (req.headers.authorization || '').replace(/^Bearer /, '')
   try {
-    req.userId = jwt.verify(token, SECRET).sub
+    const payload = jwt.verify(token, SECRET)
+    req.userId = payload.sub
     next()
   } catch {
     res.status(401).json({ error: 'Please log in' })
@@ -163,62 +153,55 @@ const requireAuth = (req, res, next) => {
 app.use('/api/notes', requireAuth)
 
 // Every query is scoped to req.userId, so users can only touch their own notes
-app.get('/api/notes', wrap(async (req, res) => {
-  const q = `%${String(req.query.q || '').trim().replace(/[\\%_]/g, '\\$&')}%`
+app.get('/api/notes', (req, res) => {
+  const q = `%${(req.query.q || '').trim()}%`
   res.json(
-    await query(
-      `SELECT ${cols} FROM notes WHERE user_id = $1 AND (title ILIKE $2 OR content ILIKE $2) ORDER BY updated_at DESC, id DESC`,
-      [req.userId, q]
-    )
+    db
+      .prepare(`SELECT ${cols} FROM notes WHERE userId = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updatedAt DESC, id DESC`)
+      .all(req.userId, q, q)
   )
-}))
+})
 
-app.post('/api/notes', wrap(async (req, res) => {
+app.post('/api/notes', (req, res) => {
   const { title = 'Untitled', content = '' } = req.body
-  const [note] = await query(
-    `INSERT INTO notes (user_id, title, content) VALUES ($1, $2, $3) RETURNING ${cols}`,
-    [req.userId, String(title), String(content)]
-  )
-  res.status(201).json(note)
-}))
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO notes (userId, title, content) VALUES (?, ?, ?)')
+    .run(req.userId, String(title), String(content))
+  res.status(201).json(db.prepare(`SELECT ${cols} FROM notes WHERE id = ?`).get(lastInsertRowid))
+})
 
-app.put('/api/notes/:id', wrap(async (req, res) => {
+app.put('/api/notes/:id', (req, res) => {
   const { title = 'Untitled', content = '' } = req.body
-  const existing = await ownNote(req.params.id, req.userId)
+  const existing = ownNote(req.params.id, req.userId)
   if (!existing) return res.status(404).json({ error: 'Not found' })
   if (existing.title !== String(title) || existing.content !== String(content)) {
-    await snapshot(existing)
-    await query('UPDATE notes SET title = $1, content = $2, updated_at = now() WHERE id = $3', [String(title), String(content), existing.id])
+    snapshot(existing)
+    db.prepare('UPDATE notes SET title = ?, content = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(String(title), String(content), existing.id)
   }
-  const [note] = await query(`SELECT ${cols} FROM notes WHERE id = $1`, [existing.id])
-  res.json(note)
-}))
+  res.json(db.prepare(`SELECT ${cols} FROM notes WHERE id = ?`).get(existing.id))
+})
 
-app.get('/api/notes/:id/history', wrap(async (req, res) => {
-  const note = await ownNote(req.params.id, req.userId)
+app.get('/api/notes/:id/history', (req, res) => {
+  const note = ownNote(req.params.id, req.userId)
   if (!note) return res.status(404).json({ error: 'Not found' })
-  res.json(await query('SELECT id, title, content, created_at AS "createdAt" FROM note_versions WHERE note_id = $1 ORDER BY id DESC', [note.id]))
-}))
+  res.json(db.prepare('SELECT id, title, content, createdAt FROM note_versions WHERE noteId = ? ORDER BY id DESC').all(note.id))
+})
 
-app.post('/api/notes/:id/restore/:versionId', wrap(async (req, res) => {
-  const note = await ownNote(req.params.id, req.userId)
-  const versionId = asId(req.params.versionId)
-  const [version] = note && versionId !== null
-    ? await query('SELECT title, content FROM note_versions WHERE id = $1 AND note_id = $2', [versionId, note.id])
-    : []
+app.post('/api/notes/:id/restore/:versionId', (req, res) => {
+  const note = ownNote(req.params.id, req.userId)
+  const version = note && db.prepare('SELECT title, content FROM note_versions WHERE id = ? AND noteId = ?').get(req.params.versionId, note.id)
   if (!version) return res.status(404).json({ error: 'Not found' })
-  await snapshot(note, true)
-  await query('UPDATE notes SET title = $1, content = $2, updated_at = now() WHERE id = $3', [version.title, version.content, note.id])
-  const [restored] = await query(`SELECT ${cols} FROM notes WHERE id = $1`, [note.id])
-  res.json(restored)
-}))
+  snapshot(note, true)
+  db.prepare('UPDATE notes SET title = ?, content = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?').run(version.title, version.content, note.id)
+  res.json(db.prepare(`SELECT ${cols} FROM notes WHERE id = ?`).get(note.id))
+})
 
-app.delete('/api/notes/:id', wrap(async (req, res) => {
-  const note = await ownNote(req.params.id, req.userId)
-  if (!note) return res.status(404).json({ error: 'Not found' })
-  await query('DELETE FROM notes WHERE id = $1', [note.id]) // versions cascade
-  res.json({ ok: true })
-}))
+app.delete('/api/notes/:id', (req, res) => {
+  db.prepare('DELETE FROM note_versions WHERE noteId IN (SELECT id FROM notes WHERE id = ? AND userId = ?)').run(req.params.id, req.userId)
+  const { changes } = db.prepare('DELETE FROM notes WHERE id = ? AND userId = ?').run(req.params.id, req.userId)
+  changes ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })
+})
 
 // Serve the built React app in production
 const dist = path.join(here, '../client/dist')
