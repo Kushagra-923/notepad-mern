@@ -73,7 +73,7 @@ export default () => scenario('Sharing, live editing, conflicts, history', 5091,
   check('revoking access removes the note for bob with a message', await b.locator('.error').isVisible())
 
   const before = await a.evaluate(() => document.documentElement.dataset.theme)
-  await a.locator('.side-head .text-btn').click()
+  await a.locator('.side-head .text-btn.mono').click()
   await a.reload()
   check('dark mode toggles and persists', (await a.evaluate(() => document.documentElement.dataset.theme)) !== before)
 })

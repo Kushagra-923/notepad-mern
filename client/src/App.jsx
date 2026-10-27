@@ -61,6 +61,12 @@ export default function App() {
     setLoading(true)
   }
 
+  // Send any unsaved edit first, so signing out never drops the last few words
+  const signOut = async () => {
+    await flush()
+    logout()
+  }
+
   const api = async (url, options) => {
     let res
     try {
@@ -333,7 +339,7 @@ export default function App() {
       <Sidebar
         notes={notes} teams={teams} onManageTeams={() => setTeamsOpen(true)} activeId={activeId} onSelect={select} onNew={addNote}
         search={search} onSearch={setSearch} scope={scope} onScope={setScope}
-        loading={loading} username={session.username} onLogout={logout}
+        loading={loading} username={session.username} onLogout={signOut}
         theme={theme} onToggleTheme={toggleTheme}
       />
 

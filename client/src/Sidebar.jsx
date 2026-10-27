@@ -8,7 +8,10 @@ export default function Sidebar({ notes, teams, activeId, onSelect, onNew, searc
     <aside>
       <div className="side-head">
         <div className="brand">notepad</div>
-        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        <div className="side-actions">
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <button className="logout" onClick={onLogout}>Log out</button>
+        </div>
       </div>
       <div className="search-row">
         <input className="search" placeholder="Search notes…" value={search} onChange={(e) => onSearch(e.target.value)} />
@@ -39,8 +42,7 @@ export default function Sidebar({ notes, teams, activeId, onSelect, onNew, searc
         )}
       </ul>
       <div className="user">
-        <span className="uname mono">{username}</span>
-        <button className="text-btn" onClick={onLogout}>log out</button>
+        <span className="uname mono">signed in as {username}</span>
       </div>
     </aside>
   )

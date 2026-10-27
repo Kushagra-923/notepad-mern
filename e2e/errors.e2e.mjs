@@ -45,6 +45,21 @@ export default () => scenario('Errors, empty states and offline handling', 5094,
   const saved = (await api('GET', `/api/notes/${(await api('GET', '/api/notes')).body[0]._id}`)).body
   check('the edit made offline is saved automatically once back online', saved.content.includes('and then offline'))
 
+  // --- logging out ---
+  await newNote(a)
+  await a.locator('.title').fill('Logout test')
+  await type(a, 'last words before logging out')
+  await a.getByRole('button', { name: 'Log out' }).click() // immediately, before autosave fires
+  await a.locator('.auth').waitFor({ timeout: 5000 })
+  check('Log out returns to the login screen', true)
+  check('no session is left in the browser', (await a.evaluate(() => localStorage.getItem('session'))) === null)
+  await a.locator('.auth input').nth(0).fill('dana')
+  await a.locator('.auth input').nth(1).fill('secret1')
+  await a.getByRole('button', { name: 'Log in' }).click()
+  await a.locator('aside li', { hasText: 'Logout test' }).click()
+  await a.locator('.tiptap').getByText('last words before logging out').waitFor({ timeout: 8000 })
+  check('an edit made just before logging out was saved', true)
+
   // --- expired / invalid session ---
   await a.evaluate(() => {
     const s = JSON.parse(localStorage.getItem('session'))

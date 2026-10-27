@@ -160,3 +160,7 @@ button.primary:disabled { opacity: .45; cursor: default; }
 .team-row { display: flex; align-items: center; gap: 12px; }
 .team-row select { flex: 1; }
 .team-note { margin: 0; font-size: .9rem; }
+
+.side-actions { display: flex; align-items: center; gap: 14px; }
+.logout { font-family: var(--mono); font-size: .78rem; padding: 5px 10px; border: 1px solid var(--border); border-radius: 3px; color: var(--ink); }
+.logout:hover { border-color: var(--ink); background: var(--rule); }
