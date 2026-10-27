@@ -7,6 +7,8 @@ import TeamsDialog from './TeamsDialog.jsx'
 import Editor from './Editor.jsx'
 import { ago, words, textOf, userIdOf } from './lib.js'
 
+const OFFLINE = 'Cannot reach the server.'
+
 const loadSession = () => {
   try { return JSON.parse(localStorage.getItem('session')) } catch { return null }
 }
@@ -30,6 +32,7 @@ export default function App() {
   const saveTimer = useRef()
   const saving = useRef(false)
   const saveAgain = useRef(null)
+  const retryTimer = useRef()
   const notesRef = useRef([])
   const conflictRef = useRef(null)
   const activeIdRef = useRef(null)
@@ -44,6 +47,7 @@ export default function App() {
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
 
   const logout = () => {
+    clearTimeout(retryTimer.current)
     localStorage.removeItem('session')
     setSession(null)
     setNotes([])
@@ -181,11 +185,17 @@ export default function App() {
       const saved = await api(`/api/notes/${id}`, { method: 'PUT', body: { title: n.title, content: n.content, version: n.version } })
       patchNote(id, { version: saved.version, updatedAt: saved.updatedAt, updatedBy: saved.updatedBy })
       setStatus('Saved')
+      setError((msg) => (msg.startsWith(OFFLINE) ? '' : msg))
     } catch (e) {
-      setStatus('')
-      if (e.status === 409) setConflict({ id, current: e.body.current })
-      else if (e.status === 403) { setError(e.message); refresh(id) }
-      else setError(e.message)
+      if (e.status === 409) { setStatus(''); setConflict({ id, current: e.body.current }) }
+      else if (e.status === 403) { setStatus(''); setError(e.message); refresh(id) }
+      else if (e.status === 0) {
+        // offline: keep the text in the editor and try again until it goes through
+        setStatus('Not saved yet')
+        setError(`${OFFLINE} Your changes will be saved when you reconnect.`)
+        clearTimeout(retryTimer.current)
+        retryTimer.current = setTimeout(() => save(id), 3000)
+      } else { setStatus(''); setError(e.message) }
     } finally {
       saving.current = false
       if (saveAgain.current) { const next = saveAgain.current; saveAgain.current = null; await save(next) }
@@ -232,6 +242,7 @@ export default function App() {
     patchNote(activeId, { [field]: value })
     setStatus('Saving…')
     clearTimeout(saveTimer.current?.timer)
+    clearTimeout(retryTimer.current)
     const id = activeId
     // browsers return a number from setTimeout, so keep the id next to it instead of on it
     saveTimer.current = { id, timer: setTimeout(() => { saveTimer.current = null; save(id) }, 500) }
@@ -331,7 +342,7 @@ export default function App() {
           <>
             <div className="toolbar">
               <button className="text-btn back" onClick={() => select(null)} aria-label="Back to notes">← notes</button>
-              <input ref={titleRef} className="title" value={active.title} readOnly={readOnly || !loaded} onChange={(e) => edit('title', e.target.value)} placeholder="Untitled" />
+              <input ref={titleRef} className="title" value={active.title} readOnly={readOnly || !loaded} maxLength={200} onChange={(e) => edit('title', e.target.value)} placeholder="Untitled" />
               <span className="status mono">{status}</span>
               <button className={`text-btn ${history ? 'on' : ''}`} onClick={openHistory} disabled={!loaded}>history</button>
               {active.role === 'owner' ? (

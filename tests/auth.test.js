@@ -50,3 +50,9 @@ test('login is rate limited', async () => {
   await limited.close()
   assert.deepEqual(codes, [401, 401, 401, 429, 429])
 })
+
+test('unknown API routes return JSON 404', async () => {
+  const res = await s.call('GET', '/api/does-not-exist')
+  assert.equal(res.status, 404)
+  assert.equal(res.body.error, 'Not found')
+})

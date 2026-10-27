@@ -28,6 +28,8 @@ export function createApp({ authLimit = Number(process.env.AUTH_RATE_LIMIT) || 2
   app.use('/api/notes', requireAuth, noteRoutes)
   app.use('/api/teams', requireAuth, teamRoutes)
 
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }))
+
   // Serve the built React app in production
   const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../client/dist')
   app.use(express.static(dist))

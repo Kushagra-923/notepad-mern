@@ -7,6 +7,7 @@ export default function Auth({ onAuth, api, theme, onToggleTheme }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
   const googleBtn = useRef()
 
   useEffect(() => {
@@ -41,12 +42,16 @@ export default function Auth({ onAuth, api, theme, onToggleTheme }) {
   const submit = async (e) => {
     e.preventDefault()
     setError('')
+    if (busy) return
+    if (!username.trim()) return setError('Enter your username or email')
     if (mode === 'register' && password.length < 6) return setError('Password must be at least 6 characters')
+    setBusy(true)
     try {
-      const data = await api(`/api/auth/${mode}`, { method: 'POST', body: { username, password } })
+      const data = await api(`/api/auth/${mode}`, { method: 'POST', body: { username: username.trim(), password } })
       onAuth(data)
     } catch (err) {
       setError(err.message)
+      setBusy(false)
     }
   }
 
@@ -67,7 +72,7 @@ export default function Auth({ onAuth, api, theme, onToggleTheme }) {
           </span>
         </label>
         {error && <p className="form-error">{error}</p>}
-        <button type="submit" className="primary">{mode === 'login' ? 'Log in' : 'Sign up'}</button>
+        <button type="submit" className="primary" disabled={busy}>{busy ? 'One moment…' : mode === 'login' ? 'Log in' : 'Sign up'}</button>
         <div ref={googleBtn} className="google" />
         <button type="button" className="text-btn switch" onClick={() => { setError(''); setMode(mode === 'login' ? 'register' : 'login') }}>
           {mode === 'login' ? 'no account? sign up' : 'have an account? log in'}
