@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Dialog from './Dialog.jsx'
 
-export default function ShareDialog({ noteId, teams, teamId, api, onMoved, onClose }) {
+export default function ShareDialog({ noteId, teams, teamId, api, onMoved, onChanged, onClose }) {
   const [shares, setShares] = useState(null)
   const [username, setUsername] = useState('')
   const [role, setRole] = useState('editor')
@@ -14,7 +14,7 @@ export default function ShareDialog({ noteId, teams, teamId, api, onMoved, onClo
   const run = async (fn) => {
     setError('')
     setBusy(true)
-    try { await fn(); await load() } catch (e) { setError(e.message) } finally { setBusy(false) }
+    try { await fn(); await load(); onChanged?.() } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
   const setRoleFor = (name, r) => run(() => api(`/api/notes/${noteId}/shares`, { method: 'POST', body: { username: name, role: r } }))
   const add = (e) => {

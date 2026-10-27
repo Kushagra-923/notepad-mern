@@ -33,7 +33,9 @@ export const VISIBLE = '(n.owner_id = $1 OR s.user_id IS NOT NULL OR tm.user_id 
 export const noteSelect = (full = true) => `
   SELECT n.id AS "_id", n.title, ${full ? 'n.content' : 'left(n.content_text, 200) AS preview'}, n.version,
          n.updated_at AS "updatedAt", uu.username AS "updatedBy", ou.username AS "ownerName",
-         n.team_id AS "teamId", t.name AS "teamName", ${ROLE_SQL} AS role
+         n.team_id AS "teamId", t.name AS "teamName", ${ROLE_SQL} AS role,
+         CASE WHEN n.owner_id = $1 OR tm.role = 'owner'
+              THEN (SELECT count(*)::int FROM note_shares sh WHERE sh.note_id = n.id) END AS "shareCount"
   ${JOINS}`
 
 export const getNoteFor = async (noteId, userId) => (await query(`${noteSelect()} WHERE n.id = $2`, [userId, noteId]))[0]

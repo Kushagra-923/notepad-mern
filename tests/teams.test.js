@@ -160,3 +160,15 @@ test('an individual share still works on a team note for a non-member', async ()
   assert.equal(view.body.role, 'viewer')
   assert.equal((await s.call('PUT', `/api/notes/${note._id}`, { token: carol.token, body: { title: 'a', content: 'b', version: note.version } })).status, 403)
 })
+
+test('notes in my teams written by others appear under "shared with me", not "mine"', async () => {
+  const team = await makeTeam('Shared view')
+  await addMember(team, 'bob')
+  const note = await teamNote(team, alice.token, 'from alice in team')
+  const ids = async (token, scope) => (await s.call('GET', `/api/notes?scope=${scope}`, { token })).body.map((n) => n._id)
+  assert.ok((await ids(bob.token, 'shared')).includes(note._id))
+  assert.ok(!(await ids(bob.token, 'mine')).includes(note._id))
+  assert.ok(!(await ids(alice.token, 'shared')).includes(note._id)) // the author already owns it
+  assert.ok((await ids(alice.token, 'mine')).includes(note._id))
+  assert.ok(!(await ids(carol.token, 'shared')).includes(note._id)) // outsiders see nothing
+})

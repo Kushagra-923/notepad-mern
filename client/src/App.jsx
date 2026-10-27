@@ -119,7 +119,7 @@ export default function App() {
     const next = incoming.map((n) => {
       const old = prev.get(n._id)
       if (n._id !== open || !old) return n
-      return { ...old, preview: n.preview, role: n.role, ownerName: n.ownerName }
+      return { ...old, preview: n.preview, role: n.role, ownerName: n.ownerName, shareCount: n.shareCount, teamId: n.teamId, teamName: n.teamName }
     })
     if (open && !next.some((n) => n._id === open) && prev.has(open)) next.unshift(prev.get(open)) // keep the open note even if the filter hides it
     notesRef.current = next
@@ -396,6 +396,7 @@ export default function App() {
         <ShareDialog
           noteId={active._id} teams={teams} teamId={active.teamId} api={api}
           onMoved={(note) => { patchNote(note._id, { teamId: note.teamId, teamName: note.teamName, role: note.role }); loadTeams().catch(() => {}) }}
+          onChanged={() => loadList().catch(() => {})}
           onClose={() => setSharing(false)}
         />
       )}

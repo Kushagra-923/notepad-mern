@@ -118,3 +118,14 @@ test('deleting a note removes its shares and history', async () => {
   assert.equal((await s.call('DELETE', `/api/notes/${note._id}`, { token: alice.token })).status, 200)
   assert.equal((await s.call('GET', `/api/notes/${note._id}`, { token: bob.token })).status, 404)
 })
+
+test('the owner sees how many people a note is shared with; collaborators do not', async () => {
+  const note = await newNote('Count me', 'c')
+  const count = async (token) => (await s.call('GET', '/api/notes', { token })).body.find((n) => n._id === note._id)?.shareCount
+  assert.equal(await count(alice.token), 0)
+  await share(note, 'bob', 'viewer')
+  await share(note, 'carol', 'editor')
+  assert.equal(await count(alice.token), 2)
+  assert.equal(await count(bob.token), null) // not leaked to people who are not the owner
+  assert.equal((await s.call('GET', `/api/notes/${note._id}`, { token: alice.token })).body.shareCount, 2)
+})

@@ -21,6 +21,8 @@ export default () => scenario('Sharing, live editing, conflicts, history', 5091,
   await a.getByRole('button', { name: 'Share', exact: true }).click()
   await a.locator('.share-list li', { hasText: 'bob' }).waitFor()
   await a.locator('.dialog').getByRole('button', { name: 'close' }).click()
+  await a.locator('aside li .badge', { hasText: 'shared with 1 person' }).waitFor({ timeout: 5000 })
+  check('owner sees "shared with 1 person" on the note', true)
 
   await b.reload()
   await b.getByRole('button', { name: 'shared with me' }).click()

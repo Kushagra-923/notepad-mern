@@ -31,14 +31,14 @@ export default function Sidebar({ notes, teams, activeId, onSelect, onNew, searc
           <li key={n._id} className={n._id === activeId ? 'active' : ''} onClick={() => onSelect(n._id)}>
             <div className="li-top"><strong>{n.title || 'Untitled'}</strong><time className="mono">{ago(n.updatedAt)}</time></div>
             <small>{(n.content !== undefined ? textOf(n.content) : n.preview ?? '').slice(0, 70) || 'No content'}</small>
-            {n.teamName
-              ? <span className="badge mono">team · {n.teamName}</span>
-              : n.role !== 'owner' && <span className="badge mono">{n.role} · from {n.ownerName}</span>}
+            {n.teamName && <span className="badge mono">team · {n.teamName}{n.role !== 'owner' ? ` · from ${n.ownerName}` : ''}</span>}
+            {!n.teamName && n.role !== 'owner' && <span className="badge mono">{n.role} · from {n.ownerName}</span>}
+            {n.role === 'owner' && n.shareCount > 0 && <span className="badge mono">shared with {n.shareCount} {n.shareCount === 1 ? 'person' : 'people'}</span>}
           </li>
         ))}
         {loading && <p className="empty">Loading…</p>}
         {!loading && !notes.length && (
-          <p className="empty">{search ? 'Nothing matches.' : scope === 'shared' ? 'Nothing has been shared with you yet.' : scope.startsWith('team:') ? 'No notes in this team yet.' : 'No notes yet.'}</p>
+          <p className="empty">{search ? 'Nothing matches.' : scope === 'shared' ? 'Nothing has been shared with you yet. Notes from other people, and notes in your teams, show up here.' : scope.startsWith('team:') ? 'No notes in this team yet.' : 'No notes yet.'}</p>
         )}
       </ul>
       <div className="user">

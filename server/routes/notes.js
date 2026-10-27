@@ -28,10 +28,10 @@ const snapshot = async (note, force = false) => {
 
 const router = Router()
 
-// scope: all (default) | mine | shared (shared with me individually) | team:<id>
+// scope: all (default) | mine | shared (notes by others that I can open: shared with me or in my teams) | team:<id>
 const scopeClause = (scope) => {
   if (scope === 'mine') return { sql: 'n.owner_id = $1', params: [] }
-  if (scope === 'shared') return { sql: 'n.owner_id <> $1 AND s.user_id IS NOT NULL', params: [] }
+  if (scope === 'shared') return { sql: 'n.owner_id <> $1 AND (s.user_id IS NOT NULL OR tm.user_id IS NOT NULL)', params: [] }
   const team = /^team:(\d{1,9})$/.exec(scope || '')
   if (team) return { sql: 'n.team_id = $3 AND tm.user_id IS NOT NULL', params: [Number(team[1])] }
   return { sql: VISIBLE, params: [] }
