@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { query } from '../db.js'
 import { wrap, validateNote } from '../middleware.js'
-import { withNote, noteSelect, getNoteFor } from '../access.js'
+import { withNote, noteSelect, getNoteFor, VISIBLE, asId } from '../access.js'
 
 // Save the state a note had before an edit, credited to whoever wrote that state.
 // Throttled so one person's autosave doesn't create hundreds of versions, but never throttled
@@ -27,23 +27,36 @@ const snapshot = async (note, force = false) => {
 
 const router = Router()
 
-// Notes the user owns or that were shared with them. scope: all (default) | mine | shared
+// scope: all (default) | mine | shared (shared with me individually) | team:<id>
+const scopeClause = (scope) => {
+  if (scope === 'mine') return { sql: 'n.owner_id = $1', params: [] }
+  if (scope === 'shared') return { sql: 'n.owner_id <> $1 AND s.user_id IS NOT NULL', params: [] }
+  const team = /^team:(\d{1,9})$/.exec(scope || '')
+  if (team) return { sql: 'n.team_id = $3 AND tm.user_id IS NOT NULL', params: [Number(team[1])] }
+  return { sql: VISIBLE, params: [] }
+}
+
 router.get('/', wrap(async (req, res) => {
   const q = `%${String(req.query.q || '').trim().replace(/[\\%_]/g, '\\$&')}%`
-  const scope = { mine: 'n.owner_id = $1', shared: 'n.owner_id <> $1 AND s.user_id IS NOT NULL' }[req.query.scope] || '(n.owner_id = $1 OR s.user_id IS NOT NULL)'
+  const { sql, params } = scopeClause(req.query.scope)
   res.json(
     await query(
-      `${noteSelect(false)} WHERE ${scope} AND (n.title ILIKE $2 OR n.content ILIKE $2) ORDER BY n.updated_at DESC, n.id DESC`,
-      [req.userId, q]
+      `${noteSelect(false)} WHERE ${sql} AND (n.title ILIKE $2 OR n.content ILIKE $2) ORDER BY n.updated_at DESC, n.id DESC`,
+      [req.userId, q, ...params]
     )
   )
 }))
 
 router.post('/', validateNote, wrap(async (req, res) => {
-  const { title = 'Untitled', content = '' } = req.body
+  const { title = 'Untitled', content = '', teamId = null } = req.body
+  if (teamId !== null) {
+    const id = asId(teamId)
+    const [member] = id === null ? [] : await query('SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2', [id, req.userId])
+    if (!member) return res.status(403).json({ error: 'You are not a member of that team' })
+  }
   const [{ id }] = await query(
-    'INSERT INTO notes (owner_id, updated_by, title, content) VALUES ($1, $1, $2, $3) RETURNING id',
-    [req.userId, title, content]
+    'INSERT INTO notes (owner_id, updated_by, title, content, team_id) VALUES ($1, $1, $2, $3, $4) RETURNING id',
+    [req.userId, title, content, teamId]
   )
   res.status(201).json(await getNoteFor(id, req.userId))
 }))
@@ -100,6 +113,18 @@ router.post('/:id/restore/:versionId', withNote('editor'), wrap(async (req, res)
 router.delete('/:id', withNote('owner'), wrap(async (req, res) => {
   await query('DELETE FROM notes WHERE id = $1', [req.note.id]) // versions and shares cascade
   res.json({ ok: true })
+}))
+
+// Move a note into one of your teams, or back to personal (teamId: null)
+router.put('/:id/team', withNote('owner'), wrap(async (req, res) => {
+  const { teamId = null } = req.body || {}
+  if (teamId !== null) {
+    const id = asId(teamId)
+    const [member] = id === null ? [] : await query('SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2', [id, req.userId])
+    if (!member) return res.status(403).json({ error: 'You are not a member of that team' })
+  }
+  await query('UPDATE notes SET team_id = $1 WHERE id = $2', [teamId, req.note.id])
+  res.json(await getNoteFor(req.note.id, req.userId))
 }))
 
 // ---------- Sharing (owner manages; a collaborator may remove themselves) ----------

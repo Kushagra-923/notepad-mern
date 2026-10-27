@@ -126,3 +126,11 @@ select { font-family: var(--mono); font-size: .78rem; background: var(--paper); 
 .share-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
 .share-list li span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 button.primary:disabled { opacity: .45; cursor: default; }
+
+.tabs .manage { margin-left: auto; }
+.team { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.team-head { display: flex; align-items: baseline; gap: 12px; }
+.team-head strong { flex: 1; }
+.team-row { display: flex; align-items: center; gap: 12px; }
+.team-row select { flex: 1; }
+.team-note { margin: 0; font-size: .9rem; }

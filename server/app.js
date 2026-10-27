@@ -4,6 +4,7 @@ import express from 'express'
 import rateLimit from 'express-rate-limit'
 import authRoutes from './routes/auth.js'
 import noteRoutes from './routes/notes.js'
+import teamRoutes from './routes/teams.js'
 import { requireAuth, errorHandler } from './middleware.js'
 
 export function createApp({ authLimit = Number(process.env.AUTH_RATE_LIMIT) || 20 } = {}) {
@@ -25,6 +26,7 @@ export function createApp({ authLimit = Number(process.env.AUTH_RATE_LIMIT) || 2
 
   app.use('/api/auth', authRoutes)
   app.use('/api/notes', requireAuth, noteRoutes)
+  app.use('/api/teams', requireAuth, teamRoutes)
 
   // Serve the built React app in production
   const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../client/dist')

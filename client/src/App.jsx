@@ -3,6 +3,7 @@ import Auth from './Auth.jsx'
 import Sidebar from './Sidebar.jsx'
 import HistoryPanel from './HistoryPanel.jsx'
 import ShareDialog from './ShareDialog.jsx'
+import TeamsDialog from './TeamsDialog.jsx'
 import { ago, words, userIdOf } from './lib.js'
 
 const loadSession = () => {
@@ -20,6 +21,8 @@ export default function App() {
   const [history, setHistory] = useState(null) // null = closed, array = open
   const [selectedVersion, setSelectedVersion] = useState(null)
   const [sharing, setSharing] = useState(false)
+  const [teams, setTeams] = useState([])
+  const [teamsOpen, setTeamsOpen] = useState(false)
   const [conflict, setConflict] = useState(null) // { id, current } when someone else saved first
   const [loading, setLoading] = useState(true)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
@@ -47,6 +50,9 @@ export default function App() {
     setActiveId(null)
     setHistory(null)
     setSharing(false)
+    setTeams([])
+    setTeamsOpen(false)
+    setScope('all')
     setLoading(true)
   }
 
@@ -127,6 +133,19 @@ export default function App() {
     return () => clearInterval(i)
   }, [search, scope, token])
 
+  // ----- teams -----
+  const loadTeams = async () => {
+    const data = await api('/api/teams')
+    setTeams(data)
+    if (scope.startsWith('team:') && !data.some((t) => `team:${t.id}` === scope)) setScope('all') // left or deleted
+  }
+  useEffect(() => {
+    if (!token) return
+    loadTeams().catch(() => {})
+    const i = setInterval(() => loadTeams().catch(() => {}), 30000)
+    return () => clearInterval(i)
+  }, [token, scope])
+
   // ----- open note: load it, then keep it fresh so collaborators' edits appear -----
   const refresh = async (id) => {
     try {
@@ -135,7 +154,7 @@ export default function App() {
       if (!local) return
       const dirty = saveTimer.current?.id === id || saving.current
       if (local.content === undefined || (fresh.version > local.version && !dirty && conflictRef.current?.id !== id)) patchNote(id, fresh)
-      else patchNote(id, { role: fresh.role })
+      else patchNote(id, { role: fresh.role, teamId: fresh.teamId, teamName: fresh.teamName })
     } catch (e) {
       if (e.status === 404) { dropNote(id); setError('That note is no longer available to you.') }
       // other failures (offline, server restarting) are retried by the next poll
@@ -195,7 +214,8 @@ export default function App() {
   const addNote = async () => {
     try {
       await flush()
-      const note = await api('/api/notes', { method: 'POST', body: { title: 'Untitled', content: '' } })
+      const teamId = scope.startsWith('team:') ? Number(scope.slice(5)) : null
+      const note = await api('/api/notes', { method: 'POST', body: { title: 'Untitled', content: '', teamId } })
       if (scope === 'shared') setScope('mine')
       notesRef.current = [note, ...notesRef.current]
       setNotes(notesRef.current)
@@ -299,7 +319,7 @@ export default function App() {
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
 
       <Sidebar
-        notes={notes} activeId={activeId} onSelect={select} onNew={addNote}
+        notes={notes} teams={teams} onManageTeams={() => setTeamsOpen(true)} activeId={activeId} onSelect={select} onNew={addNote}
         search={search} onSearch={setSearch} scope={scope} onScope={setScope}
         loading={loading} username={session.username} onLogout={logout}
         theme={theme} onToggleTheme={toggleTheme}
@@ -319,9 +339,10 @@ export default function App() {
                   <button className="text-btn danger" onClick={remove}>delete</button>
                 </>
               ) : (
-                <button className="text-btn danger" onClick={leave}>leave</button>
+                !active.teamId && <button className="text-btn danger" onClick={leave}>leave</button>
               )}
             </div>
+            {active.teamId && <div className="notice">Team note: everyone in <strong>{active.teamName}</strong> can edit this.</div>}
             {readOnly && <div className="notice">View only. <strong>{active.ownerName}</strong> shared this note with you as a viewer.</div>}
             {conflict?.id === activeId && (
               <div className="conflict">
@@ -360,7 +381,24 @@ export default function App() {
         )}
       </main>
 
-      {sharing && active && <ShareDialog noteId={active._id} api={api} onClose={() => setSharing(false)} />}
+      {sharing && active && (
+        <ShareDialog
+          noteId={active._id} teams={teams} teamId={active.teamId} api={api}
+          onMoved={(note) => { patchNote(note._id, { teamId: note.teamId, teamName: note.teamName, role: note.role }); loadTeams().catch(() => {}) }}
+          onClose={() => setSharing(false)}
+        />
+      )}
+      {teamsOpen && (
+        <TeamsDialog
+          teams={teams} myId={myId} api={api}
+          onChanged={async () => {
+            await loadTeams()
+            await loadList().catch(() => {})
+            if (activeIdRef.current) await refresh(activeIdRef.current) // access may just have changed
+          }}
+          onClose={() => setTeamsOpen(false)}
+        />
+      )}
     </div>
   )
 }

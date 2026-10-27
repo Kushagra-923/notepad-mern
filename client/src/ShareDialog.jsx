@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Dialog from './Dialog.jsx'
 
-export default function ShareDialog({ noteId, api, onClose }) {
+export default function ShareDialog({ noteId, teams, teamId, api, onMoved, onClose }) {
   const [shares, setShares] = useState(null)
   const [username, setUsername] = useState('')
   const [role, setRole] = useState('editor')
@@ -23,8 +23,24 @@ export default function ShareDialog({ noteId, api, onClose }) {
   }
   const remove = (userId) => run(() => api(`/api/notes/${noteId}/shares/${userId}`, { method: 'DELETE' }))
 
+  const move = (value) => run(async () => {
+    const note = await api(`/api/notes/${noteId}/team`, { method: 'PUT', body: { teamId: value === '' ? null : Number(value) } })
+    onMoved(note)
+  })
+  const team = teams.find((t) => t.id === teamId)
+
   return (
     <Dialog title="Share this note" onClose={onClose}>
+      {teams.length > 0 && (
+        <label className="team-row">
+          <span className="mono muted">team</span>
+          <select value={teamId ?? ''} disabled={busy} onChange={(e) => move(e.target.value)}>
+            <option value="">none (personal)</option>
+            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </label>
+      )}
+      {team && <p className="muted team-note">Everyone in <strong>{team.name}</strong> can edit this note.</p>}
       <form className="share-add" onSubmit={add}>
         <input placeholder="Their username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
         <select value={role} onChange={(e) => setRole(e.target.value)}>

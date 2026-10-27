@@ -36,4 +36,21 @@ export const schema = [
      PRIMARY KEY (note_id, user_id)
    )`,
   'CREATE INDEX IF NOT EXISTS shares_user ON note_shares (user_id)',
+  // Team workspaces
+  `CREATE TABLE IF NOT EXISTS teams (
+     id SERIAL PRIMARY KEY,
+     name TEXT NOT NULL,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE IF NOT EXISTS team_members (
+     team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+     PRIMARY KEY (team_id, user_id)
+   )`,
+  'CREATE INDEX IF NOT EXISTS team_members_user ON team_members (user_id)',
+  // Deleting a team turns its notes back into personal notes of whoever created them
+  'ALTER TABLE notes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL',
+  'CREATE INDEX IF NOT EXISTS notes_team ON notes (team_id)',
 ]
