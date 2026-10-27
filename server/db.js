@@ -1,3 +1,4 @@
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -18,7 +19,9 @@ export async function initDb(statements) {
     query = async (text, params) => (await pool.query(text, params)).rows
   } else {
     const { PGlite } = await import('@electric-sql/pglite')
-    const lite = new PGlite(process.env.PGLITE_DIR || path.join(here, '../data/pgdata'))
+    const dir = process.env.PGLITE_DIR || path.join(here, '../data/pgdata')
+    if (!dir.startsWith('memory://')) fs.mkdirSync(dir, { recursive: true }) // PGlite does not create parent folders
+    const lite = new PGlite(dir)
     await lite.waitReady
     query = async (text, params) => (await lite.query(text, params)).rows
   }
